@@ -137,7 +137,7 @@ def _locked_metrics(config: Mapping[str, Any]) -> pd.DataFrame:
     ).reset_index(drop=True)
 
 
-def _comparison_rows(
+def comparison_rows(
     metrics: pd.DataFrame,
     profile: Mapping[str, Any],
 ) -> pd.DataFrame:
@@ -173,41 +173,45 @@ def _comparison_rows(
                     reference_value,
                     larger=False,
                 )
-                rows.append(
-                    {
-                        "target": "volatility_level",
-                        "primary_metric": "qlike",
-                        "fold": int(fold),
-                        "prototype_seed": int(seed),
-                        "model_seed": int(seed),
-                        "representation": "R6",
-                        "reference": str(reference_name),
-                        "r6_qlike": candidate_value,
-                        "reference_qlike": reference_value,
-                        "absolute_qlike_reduction": (
-                            reference_value - candidate_value
-                        ),
-                        "relative_gain": gain,
-                        "win": bool(np.isfinite(gain) and gain > 0.0),
-                        "r6_task_id": str(candidate["task_id"]),
-                        "reference_task_id": str(baseline["task_id"]),
-                        "representation_variant_family": str(
-                            candidate["representation_variant_family"]
-                        ),
-                        "r6_fit_scope": str(
-                            candidate["representation_fit_scope"]
-                        ),
-                        "reference_fit_scope": str(
-                            baseline["representation_fit_scope"]
-                        ),
-                    }
-                )
+                row = {
+                    "target": str(candidate["target"]),
+                    "primary_metric": "qlike",
+                    "fold": int(fold),
+                    "prototype_seed": int(seed),
+                    "model_seed": int(seed),
+                    "representation": "R6",
+                    "reference": str(reference_name),
+                    "r6_qlike": candidate_value,
+                    "reference_qlike": reference_value,
+                    "absolute_qlike_reduction": (
+                        reference_value - candidate_value
+                    ),
+                    "relative_gain": gain,
+                    "win": bool(np.isfinite(gain) and gain > 0.0),
+                    "r6_task_id": str(candidate["task_id"]),
+                    "reference_task_id": str(baseline["task_id"]),
+                    "representation_variant_family": str(
+                        candidate["representation_variant_family"]
+                    ),
+                    "r6_fit_scope": str(
+                        candidate["representation_fit_scope"]
+                    ),
+                    "reference_fit_scope": str(
+                        baseline["representation_fit_scope"]
+                    ),
+                }
+                if "evaluation_cohort" in candidate.index:
+                    row["evaluation_cohort"] = str(
+                        candidate["evaluation_cohort"]
+                    )
+                rows.append(row)
     return pd.DataFrame(rows)
 
 
-def _summaries(
+def comparison_summaries(
     comparisons: pd.DataFrame,
     config: Mapping[str, Any],
+    profile: Mapping[str, Any],
 ) -> pd.DataFrame:
     threshold = float(config["decision"]["minimum_relative_gain"])
     minimum_win_rate = float(config["decision"]["minimum_fold_win_rate"])
@@ -224,16 +228,17 @@ def _summaries(
         )
         fold_wins = sum(float(value) > 0.0 for value in fold_means.values())
         win_rate = float((gains > 0.0).mean()) if len(gains) else np.nan
+        expected_comparisons = len(profile["folds"]) * len(profile["seeds"])
         complete = bool(
-            len(gains) == 15
-            and group["fold"].nunique() == 3
-            and group["prototype_seed"].nunique() == 5
+            len(gains) == expected_comparisons
+            and group["fold"].nunique() == len(profile["folds"])
+            and group["prototype_seed"].nunique() == len(profile["seeds"])
         )
         passed = bool(
             complete
             and float(gains.mean()) >= threshold
             and win_rate >= minimum_win_rate
-            and fold_wins == 3
+            and fold_wins == len(profile["folds"])
         )
         rows.append(
             {
@@ -272,8 +277,8 @@ def _summaries(
 def run(config: Mapping[str, Any]) -> dict[str, Path]:
     profile = _profile(config)
     metrics = _locked_metrics(config)
-    comparisons = _comparison_rows(metrics, profile)
-    summaries = _summaries(comparisons, config)
+    comparisons = comparison_rows(metrics, profile)
+    summaries = comparison_summaries(comparisons, config, profile)
     expected_references = set(map(str, profile["comparison_representations"]))
     observed_references = set(summaries["reference"].astype(str))
     complete = bool(

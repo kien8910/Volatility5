@@ -15,6 +15,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from src import (  # noqa: E402
     audit_r6_failure,
     evaluate_r6_confirmatory,
+    evaluate_target_news_only,
     evaluate_original_targets,
     prepare_targets,
     train_sector_targets,
@@ -76,6 +77,14 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Locked R6 follow-up: 3 chronological folds x 5 paired "
             "prototype/model seeds against fixed comparators."
+        ),
+    )
+    mode.add_argument(
+        "--target-news-only",
+        action="store_true",
+        help=(
+            "Locked volatility-level follow-up using only target-company "
+            "text features and true target-news validation days."
         ),
     )
     parser.add_argument(
@@ -165,6 +174,17 @@ def _evaluation_tasks(
                 required=True,
                 weight=1.0,
                 outputs=evaluate_r6_confirmatory.evaluation_outputs(),
+            ).with_id()
+        ]
+    if mode == "target_news_only":
+        return [
+            TaskSpec(
+                stage="evaluate",
+                action="target_news_only",
+                config={"experiment_profile": mode},
+                required=True,
+                weight=1.0,
+                outputs=evaluate_target_news_only.evaluation_outputs(),
             ).with_id()
         ]
     outputs = evaluate_original_targets.evaluation_outputs(config)
@@ -334,6 +354,8 @@ def _execute(
     if task.stage == "evaluate":
         if task.action == "r6_confirmatory":
             return evaluate_r6_confirmatory.run(config)
+        if task.action == "target_news_only":
+            return evaluate_target_news_only.run(config)
         return evaluate_original_targets.run_action(
             task.action, config, mode=mode
         )
@@ -372,6 +394,33 @@ def _print_completion_report(
     summary: Mapping[str, Any],
     mode: str,
 ) -> None:
+    if mode == "target_news_only":
+        decision_path = project_path(
+            config,
+            "outputs",
+            "tables",
+            "target_news_only_decision.csv",
+        )
+        if not decision_path.exists():
+            return
+        row = read_table(decision_path).iloc[0]
+        print("\nTARGET-NEWS-ONLY VOLATILITY-LEVEL EXPERIMENT")
+        print(f"Completed tasks: {summary['completed_tasks']}")
+        print(f"Failed tasks: {summary['failed_tasks']}")
+        print(f"Skipped tasks: {summary['skipped_tasks']}")
+        print(
+            f"Grid: {int(row['fold_count'])} folds x "
+            f"{int(row['prototype_seed_count'])} paired seeds"
+        )
+        print("Text news levels: target")
+        print("Primary evaluation cohort: target_news_days")
+        print(
+            "All fixed comparisons passed: "
+            f"{bool(row['all_comparisons_passed'])}"
+        )
+        print(f"Decision: {row['decision']}")
+        print(f"Next step: {row['next_step']}")
+        return
     if mode == "r6_confirmatory":
         decision_path = project_path(
             config,
@@ -539,7 +588,9 @@ def main() -> None:
     config = load_config(args.config)
     ensure_directories(config)
     mode = (
-        "r6_confirmatory"
+        "target_news_only"
+        if args.target_news_only
+        else "r6_confirmatory"
         if args.r6_confirmatory
         else "full"
         if args.full

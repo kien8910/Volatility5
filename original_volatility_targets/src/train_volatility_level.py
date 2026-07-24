@@ -90,6 +90,16 @@ def plan_tasks(
                                 payload["experiment_profile"] = str(
                                     profile["experiment_profile"]
                                 )
+                            for key in (
+                                "text_news_levels",
+                                "training_cohort",
+                                "evaluation_news_level",
+                                "evaluation_gate_representation",
+                                "primary_evaluation_cohort",
+                                "required_pooling",
+                            ):
+                                if key in profile:
+                                    payload[key] = profile[key]
                             tasks.append(
                                 experiment_task("level", "train_level", payload)
                             )

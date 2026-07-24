@@ -166,6 +166,52 @@ embedding gốc, không so trực tiếp tọa độ PCA khác nhau giữa các 
 `MOVE-TO-SPIKE-OR-MAGNITUDE` hoặc `STOP-DIRECT`. Mọi cấu hình phát hiện từ
 audit phải được xác nhận trên một giai đoạn thời gian mới.
 
+## Xác nhận volatility level chỉ với target-company news
+
+Đây là thử nghiệm mới, tách biệt khỏi `r6_confirmatory`, được khóa trước khi
+chạy theo kết quả audit:
+
+- chỉ giữ các cột text có token `__target__`; macro, sector và related không
+  được đưa vào model;
+- train Ridge `alpha=10` trên toàn bộ ngày train của từng fold để giữ cùng
+  price baseline và cỡ mẫu;
+- metric quyết định là QLIKE trên các ngày validation thực sự có target-company
+  news; `all_days` và `no_target_news_days` chỉ là chẩn đoán phụ;
+- dùng cùng true-news mask cho R0, R3, R4, R6 và mọi placebo;
+- giữ 3 chronological folds × 5 paired prototype/model seeds;
+- không đọc hoặc đánh giá locked holdout.
+
+Không cần tạo lại embedding/prototype vì codebook đã được xây riêng theo news
+level. Cần có các fold representation của bước `r6-confirmatory` trước đó.
+
+Chạy training và evaluation:
+
+```bash
+python original_volatility_targets/run_original_volatility_pipeline.py --stage level --target-news-only --resume
+python original_volatility_targets/run_original_volatility_pipeline.py --stage evaluate --target-news-only --resume
+```
+
+Hoặc chạy cả profile:
+
+```bash
+python original_volatility_targets/run_original_volatility_pipeline.py --stage all --target-news-only --resume
+```
+
+Kết quả riêng:
+
+```text
+target_news_only_fold_results.csv
+target_news_only_comparisons.csv
+target_news_only_summary.csv
+target_news_only_cohort_summary.csv
+target_news_only_decision.csv
+target_news_only_report.json
+```
+
+Chỉ
+`TARGET-NEWS-ONLY-PASS` mới cho phép khóa target-only R6 và mở locked holdout
+một lần; `TARGET-NEWS-ONLY-FAIL` giữ holdout đóng.
+
 ```bash
 python original_volatility_targets/run_original_volatility_pipeline.py --stage all --full
 ```
@@ -187,6 +233,8 @@ Các lựa chọn hỗ trợ:
 ```text
 --quick
 --full
+--r6-confirmatory
+--target-news-only
 --fold
 --seed
 --target

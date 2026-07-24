@@ -66,6 +66,12 @@ FOLD_MANIFEST_REPRESENTATIONS = {
     "P_PERMUTED",
 }
 
+NEWS_LEVELS = ("macro", "sector", "related", "target")
+_NEWS_GATE_CACHE: dict[
+    tuple[str, str, float],
+    tuple[pd.DataFrame, str],
+] = {}
+
 
 def experiment_task(
     stage: str,
@@ -285,6 +291,92 @@ def plan_representation_variants(
     ]
 
 
+def feature_columns_for_news_levels(
+    feature_columns: Sequence[str],
+    news_levels: Sequence[str],
+) -> list[str]:
+    """Keep only feature blocks whose explicit level token is requested."""
+    levels = tuple(str(level).strip().lower() for level in news_levels)
+    unknown = sorted(set(levels).difference(NEWS_LEVELS))
+    if unknown:
+        raise ValueError(f"Unknown news levels: {unknown}")
+    if not levels:
+        raise ValueError("At least one news level must be selected.")
+    tokens = tuple(f"__{level}__" for level in levels)
+    return [
+        column
+        for column in feature_columns
+        if any(token in str(column).lower() for token in tokens)
+    ]
+
+
+def _news_presence_frame(
+    config: Mapping[str, Any],
+    task: TaskSpec,
+    profile: Mapping[str, Any],
+) -> tuple[pd.DataFrame, str]:
+    level = str(profile["evaluation_news_level"]).strip().lower()
+    if level not in NEWS_LEVELS:
+        raise ValueError(f"Unknown evaluation news level: {level!r}")
+    representation = str(
+        profile.get("evaluation_gate_representation", "R6")
+    )
+    family = str(profile["representation_variant_family"])
+    row = representation_row(
+        config,
+        representation,
+        family,
+        fold=task.config["fold"],
+        seed=int(task.config["seed"]),
+        representation_variant_family=family,
+    )
+    required_pooling = profile.get("required_pooling")
+    artifact_pooling = row.get("pooling")
+    if (
+        required_pooling is not None
+        and pd.notna(artifact_pooling)
+        and str(artifact_pooling) != str(required_pooling)
+    ):
+        raise ValueError(
+            f"Target-news gate requires pooling={required_pooling!r}, "
+            f"but the fold artifact uses {artifact_pooling!r}."
+        )
+    epsilon = float(profile.get("news_presence_epsilon", 1.0e-10))
+    cache_key = (str(row["resolved_path"]), level, epsilon)
+    cached = _NEWS_GATE_CACHE.get(cache_key)
+    if cached is not None:
+        cached_frame, cached_column = cached
+        return cached_frame.copy(), cached_column
+    frame = load_representation_frame(
+        config,
+        row,
+        seed=int(task.config["seed"]),
+    )
+    numeric_columns = representation_feature_columns(frame)
+    level_columns = feature_columns_for_news_levels(
+        numeric_columns,
+        [level],
+    )
+    if not level_columns:
+        raise ValueError(
+            f"Gate representation {representation} has no {level!r} features."
+        )
+    values = (
+        frame[level_columns]
+        .replace([np.inf, -np.inf], np.nan)
+        .fillna(0.0)
+        .to_numpy(dtype=float)
+    )
+    gate_column = f"has_{level}_news"
+    gate = frame[["ticker", "feature_date"]].copy()
+    gate[gate_column] = np.abs(values).sum(axis=1) > epsilon
+    gate["__news_gate_observed"] = True
+    if gate.duplicated(["ticker", "feature_date"]).any():
+        raise AssertionError("News-presence gate contains duplicate row keys.")
+    _NEWS_GATE_CACHE[cache_key] = (gate.copy(), gate_column)
+    return gate, gate_column
+
+
 def _make_processor(feature_columns: Sequence[str]) -> ColumnTransformer:
     numeric = Pipeline(
         [
@@ -337,12 +429,36 @@ def prepare_stock_data(
         config, row, seed=int(task.config["seed"])
     )
     text_columns = representation_feature_columns(representation_frame)
+    selected_news_levels = task.config.get("text_news_levels")
+    if selected_news_levels is not None and representation != "R0":
+        text_columns = feature_columns_for_news_levels(
+            text_columns,
+            selected_news_levels,
+        )
+        if not text_columns:
+            raise ValueError(
+                f"No {list(selected_news_levels)!r} text features found for "
+                f"{representation}/{variant}."
+            )
     joined = market.merge(
         representation_frame.drop(columns=["split"], errors="ignore"),
         on=["ticker", "feature_date"],
         how="left",
         validate="one_to_one",
     )
+    gate_column: str | None = None
+    if profile.get("evaluation_news_level") is not None:
+        gate, gate_column = _news_presence_frame(
+            config,
+            task,
+            profile,
+        )
+        joined = joined.merge(
+            gate,
+            on=["ticker", "feature_date"],
+            how="left",
+            validate="one_to_one",
+        )
     if text_columns:
         joined[text_columns] = joined[text_columns].replace(
             [np.inf, -np.inf], np.nan
@@ -364,6 +480,22 @@ def prepare_stock_data(
     train, validation, test = task_split_frames(
         joined, config, profile, task.config["fold"]
     )
+    if gate_column is not None:
+        for split_name, split_frame in (
+            ("train", train),
+            ("validation", validation),
+            ("test", test),
+        ):
+            if split_frame.empty:
+                continue
+            if split_frame["__news_gate_observed"].isna().any():
+                raise AssertionError(
+                    f"{split_name} rows are missing the true-news gate for "
+                    f"fold={task.config['fold']}, seed={task.config['seed']}."
+                )
+            split_frame[gate_column] = (
+                split_frame[gate_column].fillna(False).astype(bool)
+            )
     processor = _make_processor(feature_columns)
     x_train = np.asarray(
         processor.fit_transform(train[[*feature_columns, "ticker"]]),
@@ -848,7 +980,13 @@ def prediction_frame(
 ) -> pd.DataFrame:
     columns = [
         column
-        for column in ("ticker", "feature_date", "target_date", "split")
+        for column in (
+            "ticker",
+            "feature_date",
+            "target_date",
+            "split",
+            "has_target_news",
+        )
         if column in source.columns
     ]
     frame = source[columns].copy().reset_index(drop=True)

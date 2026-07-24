@@ -57,6 +57,12 @@ METADATA_COLUMNS = (
     "representation_fit_scope",
     "qualifies_for_robustness",
     "experiment_profile",
+    "text_news_levels",
+    "training_cohort",
+    "evaluation_news_level",
+    "evaluation_gate_representation",
+    "primary_evaluation_cohort",
+    "required_pooling",
 )
 
 
@@ -132,17 +138,17 @@ def load_predictions(
             "No valid prediction checkpoints found in outputs/checkpoints/tasks"
         )
     output = pd.concat(frames, ignore_index=True, sort=False)
-    if mode == "r6_confirmatory":
+    if mode not in {None, "quick", "full"}:
         if "experiment_profile" not in output.columns:
             raise FileNotFoundError(
-                "No R6 confirmatory prediction checkpoints were found."
+                f"No {mode} prediction checkpoints were found."
             )
         output = output.loc[
             output["experiment_profile"].astype(str).eq(mode)
         ].copy()
         if output.empty:
             raise FileNotFoundError(
-                "No prediction checkpoints belong to mode=r6_confirmatory"
+                f"No prediction checkpoints belong to mode={mode}"
             )
     elif mode is not None and "quick" in output.columns:
         expected = mode == "quick"
@@ -156,7 +162,11 @@ def load_predictions(
             )
     for column in ("feature_date", "target_date"):
         if column in output.columns:
-            output[column] = pd.to_datetime(output[column], errors="raise")
+            output[column] = pd.to_datetime(
+                output[column],
+                format="mixed",
+                errors="raise",
+            )
     return output
 
 
