@@ -84,6 +84,22 @@ def _truthy_mask(values: pd.Series) -> pd.Series:
     )
 
 
+def _parse_mixed_datetime(
+    values: pd.Series,
+    *,
+    column_name: str,
+) -> pd.Series:
+    """Parse mixed date-only/ISO datetime values and reject invalid dates."""
+    try:
+        return pd.to_datetime(values, format="mixed", errors="raise")
+    except ValueError as error:
+        examples = values.dropna().astype(str).drop_duplicates().head(5).tolist()
+        raise ValueError(
+            f"Could not parse datetime column {column_name!r}; "
+            f"example values={examples}"
+        ) from error
+
+
 def _locked_predictions(config: Mapping[str, Any]) -> pd.DataFrame:
     profile = _profile(config)
     predictions = load_predictions(config, mode="r6_confirmatory")
@@ -128,8 +144,9 @@ def _locked_predictions(config: Mapping[str, Any]) -> pd.DataFrame:
         selected["input_variant"].astype(str).to_numpy() == expected_inputs
     ].copy()
     for column in ("feature_date", "target_date"):
-        selected[column] = pd.to_datetime(
-            selected[column], errors="raise"
+        selected[column] = _parse_mixed_datetime(
+            selected[column],
+            column_name=f"confirmatory_predictions.{column}",
         ).dt.normalize()
     if selected.duplicated(["task_id", *KEY_COLUMNS]).any():
         raise ValueError("Confirmatory predictions contain duplicate row keys.")
@@ -585,11 +602,13 @@ def _distribution_shift(
         ("ticker", "feature_date", "target_date", "volatility_level"),
         "original market targets",
     )
-    market["feature_date"] = pd.to_datetime(
-        market["feature_date"], errors="raise"
+    market["feature_date"] = _parse_mixed_datetime(
+        market["feature_date"],
+        column_name="market_targets.feature_date",
     ).dt.normalize()
-    market["target_date"] = pd.to_datetime(
-        market["target_date"], errors="raise"
+    market["target_date"] = _parse_mixed_datetime(
+        market["target_date"],
+        column_name="market_targets.target_date",
     ).dt.normalize()
     rows: list[dict[str, Any]] = []
     r6_tasks = (
@@ -893,9 +912,13 @@ def _prototype_bundles(
             "Prototype drift audit requires exactly one eligible assignment "
             f"per fold/seed/level; missing={sorted(expected - observed)}."
         )
-    train_end = pd.to_datetime(selected["train_end"], errors="raise")
-    validation_start = pd.to_datetime(
-        selected["validation_start"], errors="raise"
+    train_end = _parse_mixed_datetime(
+        selected["train_end"],
+        column_name="prototype_fold_manifest.train_end",
+    )
+    validation_start = _parse_mixed_datetime(
+        selected["validation_start"],
+        column_name="prototype_fold_manifest.validation_start",
     )
     if not (train_end < validation_start).all():
         raise AssertionError(
