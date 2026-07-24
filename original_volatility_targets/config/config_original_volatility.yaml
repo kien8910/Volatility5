@@ -105,7 +105,7 @@ full:
 
 r6_confirmatory:
   experiment_profile: r6_confirmatory
-  enabled_stages: [prepare, level, evaluate]
+  enabled_stages: [prepare, level, evaluate, audit]
   representations: [R0, R3, R4, R6, R9, R10, R11, P_LAGGED, P_PERMUTED]
   representation_variant_family: grid_k4_pca64_tau0p1
   level_models: [ridge]
@@ -117,6 +117,11 @@ r6_confirmatory:
   max_validation_dates: null
   max_test_dates: null
   comparison_representations: [R0, R3, R4, R9, R10, R11, P_LAGGED, P_PERMUTED]
+  audit_min_group_size: 20
+  audit_distribution_epsilon: 1.0e-8
+  audit_broad_loss_fraction: 0.70
+  audit_min_matched_centroid_cosine: 0.80
+  audit_max_mean_absolute_smd: 0.25
 
 models:
   ridge_alphas: [0.1, 1.0, 10.0]

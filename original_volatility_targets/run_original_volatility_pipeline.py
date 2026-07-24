@@ -13,6 +13,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src import (  # noqa: E402
+    audit_r6_failure,
     evaluate_r6_confirmatory,
     evaluate_original_targets,
     prepare_targets,
@@ -41,6 +42,7 @@ STAGES = (
     "uncertainty",
     "sector",
     "evaluate",
+    "audit",
 )
 
 
@@ -198,6 +200,23 @@ def _evaluation_tasks(
     ]
 
 
+def _audit_tasks(mode: str) -> list[TaskSpec]:
+    if mode != "r6_confirmatory":
+        raise ValueError(
+            "The audit stage is available only with --r6-confirmatory."
+        )
+    return [
+        TaskSpec(
+            stage="audit",
+            action="r6_failure_audit",
+            config={"experiment_profile": mode},
+            required=True,
+            weight=1.0,
+            outputs=audit_r6_failure.audit_outputs(),
+        ).with_id()
+    ]
+
+
 def plan_all_tasks(
     config: Mapping[str, Any],
     profile: Mapping[str, Any],
@@ -245,6 +264,8 @@ def plan_all_tasks(
         )
     if "evaluate" in requested:
         tasks.extend(_evaluation_tasks(config, mode))
+    if "audit" in requested:
+        tasks.extend(_audit_tasks(mode))
     return tasks
 
 
@@ -316,6 +337,8 @@ def _execute(
         return evaluate_original_targets.run_action(
             task.action, config, mode=mode
         )
+    if task.stage == "audit":
+        return audit_r6_failure.run(config)
     return _runner_for_task(task)(task, config, profile, tracker)
 
 
@@ -488,6 +511,29 @@ def _print_completion_report(
     print(f"Final decision: {row.get('decision', 'NO-GO')}")
 
 
+def _print_audit_report(config: Mapping[str, Any]) -> None:
+    path = project_path(
+        config,
+        "outputs",
+        "tables",
+        "r6_failure_audit_summary.csv",
+    )
+    if not path.is_file():
+        return
+    summary = read_table(path)
+    final = summary.loc[
+        summary["record_type"].astype(str).eq("final_recommendation")
+    ]
+    if len(final) != 1:
+        return
+    row = final.iloc[0]
+    print("\nR6 FAILURE AUDIT (POST-HOC)")
+    print(f"Recommendation: {row['key']}")
+    print(f"Reason: {row['interpretation']}")
+    print("Locked test used: False")
+    print("Confirmatory decision remains: CONFIRMATORY-FAIL")
+
+
 def main() -> None:
     args = parse_args()
     config = load_config(args.config)
@@ -564,10 +610,11 @@ def main() -> None:
                 "FAILED TASKS:\n%s",
                 json.dumps(summary["failures"], indent=2, default=str),
             )
-        if integrity_failure is None and any(
-            task.stage == "evaluate" for task in tasks
-        ):
-            _print_completion_report(config, summary, mode)
+        if integrity_failure is None:
+            if any(task.stage == "evaluate" for task in tasks):
+                _print_completion_report(config, summary, mode)
+            if any(task.stage == "audit" for task in tasks):
+                _print_audit_report(config)
     finally:
         tracker.close()
     if integrity_failure is not None:

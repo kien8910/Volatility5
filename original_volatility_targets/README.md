@@ -137,6 +137,35 @@ Các bảng riêng được ghi với tiền tố `r6_confirmatory_` trong
 không tự nâng kết luận thành GO. Chỉ khi PASS mới khóa cấu hình và thực hiện
 một lần đánh giá holdout cuối.
 
+### Audit hậu nghiệm khi R6 confirmatory thất bại
+
+Sau khi stage `level` và `evaluate` của profile R6 đã hoàn thành, chạy:
+
+```bash
+python original_volatility_targets/run_original_volatility_pipeline.py --stage audit --r6-confirmatory --resume
+```
+
+Audit chỉ đọc validation của ba chronological folds, model/feature/prototype
+đã fit trên train của từng fold và embedding cache đóng băng. Nó không đọc
+locked holdout, không train lại model và không thay đổi
+`CONFIRMATORY-FAIL`. Kết quả gồm:
+
+```text
+r6_ticker_diagnostics.csv
+r6_news_day_diagnostics.csv
+r6_news_level_diagnostics.csv
+r6_fold_distribution_shift.csv
+r6_prototype_drift.csv
+r6_failure_audit_summary.csv
+```
+
+`r6_prototype_drift.csv` so centroid bằng Hungarian matching trong không gian
+embedding gốc, không so trực tiếp tọa độ PCA khác nhau giữa các fold. Dòng
+`final_recommendation` chỉ là hướng nghiên cứu hậu nghiệm như
+`TRY-NEWS-GATING-EXPLORATORY`, `TRY-LEVEL-SPECIFIC-EXPLORATORY`,
+`MOVE-TO-SPIKE-OR-MAGNITUDE` hoặc `STOP-DIRECT`. Mọi cấu hình phát hiện từ
+audit phải được xác nhận trên một giai đoạn thời gian mới.
+
 ```bash
 python original_volatility_targets/run_original_volatility_pipeline.py --stage all --full
 ```
