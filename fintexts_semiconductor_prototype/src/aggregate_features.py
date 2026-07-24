@@ -58,6 +58,22 @@ def _nested(config: Mapping[str, Any], *keys: str, default: Any = None) -> Any:
     return current
 
 
+def _truthy_mask(values: pd.Series) -> pd.Series:
+    """Parse persisted boolean columns without treating ``"False"`` as true."""
+
+    if pd.api.types.is_bool_dtype(values):
+        return values.fillna(False).astype(bool)
+    if pd.api.types.is_numeric_dtype(values):
+        return pd.to_numeric(values, errors="coerce").fillna(0).ne(0)
+    return (
+        values.fillna("")
+        .astype(str)
+        .str.strip()
+        .str.lower()
+        .isin({"true", "1", "yes", "y"})
+    )
+
+
 def _path(
     config: Mapping[str, Any],
     candidates: Iterable[tuple[str, ...]],
@@ -351,7 +367,7 @@ def _eligible_grid_variants(
             default=True,
         )
     )
-    eligible_mask = manifest["eligible"].astype(bool)
+    eligible_mask = _truthy_mask(manifest["eligible"])
     if not aggregate_all_seeds:
         eligible_mask &= manifest["seed"].astype(int).eq(primary_seed)
     eligible = manifest.loc[eligible_mask].copy()
@@ -1172,13 +1188,17 @@ def aggregate_fold_features(
         ],
         "prototype fold manifest",
     )
+    fold_ids = pd.to_numeric(fold_manifest["fold_id"], errors="coerce")
+    prototype_seeds = pd.to_numeric(
+        fold_manifest["prototype_seed"], errors="coerce"
+    )
     selected = fold_manifest.loc[
-        fold_manifest["fold_id"].astype(int).eq(int(fold_id))
+        fold_ids.eq(int(fold_id))
         & fold_manifest["representation_variant_family"].astype(str).eq(
             representation_variant_family
         )
-        & fold_manifest["prototype_seed"].astype(int).eq(seed)
-        & fold_manifest["eligible"].astype(bool)
+        & prototype_seeds.eq(seed)
+        & _truthy_mask(fold_manifest["eligible"])
     ].copy()
     by_level = {
         str(row.news_level): row for row in selected.itertuples(index=False)

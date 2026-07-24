@@ -23,6 +23,20 @@ from src.utils import (
 LOGGER = get_logger(__name__)
 
 
+def _truthy_mask(values: pd.Series) -> pd.Series:
+    if pd.api.types.is_bool_dtype(values):
+        return values.fillna(False).astype(bool)
+    if pd.api.types.is_numeric_dtype(values):
+        return pd.to_numeric(values, errors="coerce").fillna(0).ne(0)
+    return (
+        values.fillna("")
+        .astype(str)
+        .str.strip()
+        .str.lower()
+        .isin({"true", "1", "yes", "y"})
+    )
+
+
 def _settings(config: Mapping[str, Any]) -> dict[str, Any]:
     section = config.get("r6_confirmatory")
     if not isinstance(section, Mapping):
@@ -116,6 +130,7 @@ def _validate_codebook_grid(
             "prototype_seed",
             "eligible",
             "fit_scope",
+            "assignment_path",
         ),
         "R6 confirmatory prototype fold manifest",
     )
@@ -136,16 +151,21 @@ def _validate_codebook_grid(
         for seed in settings["seeds"]
         for level in NEWS_LEVELS
     }
+    eligible_selected = selected.loc[
+        _truthy_mask(selected["eligible"])
+        & selected["fit_scope"].astype(str).eq("fold_train_only")
+        & selected["assignment_path"].fillna("").astype(str).map(
+            lambda value: Path(value).is_file()
+        )
+    ]
     observed = {
         (int(row.fold_id), int(row.prototype_seed), str(row.news_level))
-        for row in selected.itertuples(index=False)
-        if bool(row.eligible)
-        and str(row.fit_scope) == "fold_train_only"
+        for row in eligible_selected.itertuples(index=False)
     }
     missing = sorted(expected.difference(observed))
     if missing:
         rejected = selected.loc[
-            ~selected["eligible"].fillna(False).astype(bool),
+            ~_truthy_mask(selected["eligible"]),
             [
                 column
                 for column in (
@@ -162,9 +182,7 @@ def _validate_codebook_grid(
             f"fold/seed/level cells: {missing}. Rejections: "
             f"{rejected.to_dict(orient='records')}"
         )
-    if len(selected.loc[selected["eligible"].fillna(False).astype(bool)]) != len(
-        expected
-    ):
+    if len(eligible_selected) != len(expected):
         raise ValueError(
             "The fold codebook manifest has duplicate eligible cells for the "
             "locked family."
@@ -249,31 +267,47 @@ def run(config: dict) -> dict[str, Path]:
     events, embeddings = build_prototypes._load_inputs(config)
     build_prototypes._assert_chronology(events)
 
-    fold_manifest_path: Path | None = None
-    for index, seed in enumerate(settings["seeds"]):
-        LOGGER.info(
-            "R6 confirmatory codebooks | seed %d/%d=%d | folds=%s | "
-            "family=%s",
-            index + 1,
-            len(settings["seeds"]),
-            seed,
-            settings["folds"],
-            settings["family"],
-        )
-        fold_manifest_path = build_prototypes._build_fold_codebooks(
-            config=config,
-            events=events,
-            embeddings=embeddings,
-            seed=int(seed),
-            # Preserve any other fold families already materialized; identical
-            # locked cells are replaced by the current run via manifest dedup.
-            append=True,
-            **prototype,
-        )
-    if fold_manifest_path is None:
-        raise AssertionError("No confirmatory prototype seed was executed.")
-    codebook_manifest = safe_read_table(fold_manifest_path)
-    _validate_codebook_grid(codebook_manifest, settings)
+    events_variant = build_prototypes._events_variant(config)
+    suffix = build_prototypes._variant_suffix(events_variant)
+    fold_manifest_path = project_path(
+        config, f"data/processed/prototype_fold_manifest{suffix}.csv"
+    )
+    reuse_codebooks = False
+    if fold_manifest_path.is_file():
+        existing_manifest = safe_read_table(fold_manifest_path)
+        try:
+            _validate_codebook_grid(existing_manifest, settings)
+        except (KeyError, ValueError):
+            reuse_codebooks = False
+        else:
+            reuse_codebooks = True
+            LOGGER.info(
+                "R6 confirmatory codebooks already complete; reusing the "
+                "existing 3-fold x 5-seed assignment grid."
+            )
+    if not reuse_codebooks:
+        for index, seed in enumerate(settings["seeds"]):
+            LOGGER.info(
+                "R6 confirmatory codebooks | seed %d/%d=%d | folds=%s | "
+                "family=%s",
+                index + 1,
+                len(settings["seeds"]),
+                seed,
+                settings["folds"],
+                settings["family"],
+            )
+            fold_manifest_path = build_prototypes._build_fold_codebooks(
+                config=config,
+                events=events,
+                embeddings=embeddings,
+                seed=int(seed),
+                # Preserve any other fold families already materialized;
+                # identical locked cells are replaced by the current run.
+                append=True,
+                **prototype,
+            )
+        codebook_manifest = safe_read_table(fold_manifest_path)
+        _validate_codebook_grid(codebook_manifest, settings)
 
     total = len(settings["folds"]) * len(settings["seeds"])
     completed = 0
