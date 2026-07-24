@@ -45,6 +45,7 @@ METADATA_COLUMNS = (
     "representation_variant_family",
     "input_variant",
     "model",
+    "alpha",
     "fold",
     "seed",
     "news_scope",
@@ -55,6 +56,7 @@ METADATA_COLUMNS = (
     "mean_design",
     "representation_fit_scope",
     "qualifies_for_robustness",
+    "experiment_profile",
 )
 
 
@@ -130,7 +132,19 @@ def load_predictions(
             "No valid prediction checkpoints found in outputs/checkpoints/tasks"
         )
     output = pd.concat(frames, ignore_index=True, sort=False)
-    if mode is not None and "quick" in output.columns:
+    if mode == "r6_confirmatory":
+        if "experiment_profile" not in output.columns:
+            raise FileNotFoundError(
+                "No R6 confirmatory prediction checkpoints were found."
+            )
+        output = output.loc[
+            output["experiment_profile"].astype(str).eq(mode)
+        ].copy()
+        if output.empty:
+            raise FileNotFoundError(
+                "No prediction checkpoints belong to mode=r6_confirmatory"
+            )
+    elif mode is not None and "quick" in output.columns:
         expected = mode == "quick"
         quick_values = output["quick"].astype(str).str.lower().map(
             {"true": True, "false": False, "1": True, "0": False}
@@ -272,7 +286,7 @@ def aggregate_metrics(predictions: pd.DataFrame) -> pd.DataFrame:
         else:
             reference = reference.sort_values(
                 ["primary_value", "task_id"],
-                ascending=[bool(row["larger_is_better"]), True],
+                ascending=[not bool(row["larger_is_better"]), True],
                 kind="mergesort",
             ).iloc[0]
             gain = metric_gain(

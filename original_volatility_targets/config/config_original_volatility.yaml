@@ -103,6 +103,21 @@ full:
   regime_definitions: [q50_q90, q33_q67]
   sector_representations: [R0, R1, R6, R7, R10]
 
+r6_confirmatory:
+  experiment_profile: r6_confirmatory
+  enabled_stages: [prepare, level, evaluate]
+  representations: [R0, R3, R4, R6, R9, R10, R11, P_LAGGED, P_PERMUTED]
+  representation_variant_family: grid_k4_pca64_tau0p1
+  level_models: [ridge]
+  ridge_alphas: [10.0]
+  seeds: [11, 29, 47, 71, 101]
+  folds: [1, 2, 3]
+  input_variants: [price_plus_text]
+  max_train_dates: null
+  max_validation_dates: null
+  max_test_dates: null
+  comparison_representations: [R0, R3, R4, R9, R10, R11, P_LAGGED, P_PERMUTED]
+
 models:
   ridge_alphas: [0.1, 1.0, 10.0]
   elastic_net_alpha: 0.001

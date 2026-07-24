@@ -26,7 +26,10 @@ def plan_tasks(
     quick: bool,
 ) -> list[TaskSpec]:
     variants = plan_representation_variants(
-        config, profile["representations"], quick=quick
+        config,
+        profile["representations"],
+        quick=quick,
+        fixed_family=profile.get("representation_variant_family"),
     )
     tasks: list[TaskSpec] = []
     for variant in variants:
@@ -41,7 +44,10 @@ def plan_tasks(
                 if model == "historical_mean" and representation != "R0":
                     continue
                 alphas: Sequence[float | None] = (
-                    config["models"]["ridge_alphas"]
+                    profile.get(
+                        "ridge_alphas",
+                        config["models"]["ridge_alphas"],
+                    )
                     if model == "ridge" and not quick
                     else [1.0]
                     if model == "ridge"
@@ -50,13 +56,24 @@ def plan_tasks(
                 for alpha in alphas:
                     for fold in profile["folds"]:
                         for seed in profile["seeds"]:
-                            if not fold_task_supported(
+                            supported = fold_task_supported(
                                 config,
                                 representation,
                                 variant["representation_variant_family"],
                                 fold,
                                 int(seed),
+                            )
+                            if not supported and profile.get(
+                                "experiment_profile"
                             ):
+                                raise FileNotFoundError(
+                                    "Missing fold-safe confirmatory artifact for "
+                                    f"representation={representation}, "
+                                    f"family={variant['representation_variant_family']}, "
+                                    f"fold={fold}, seed={seed}. Run the residual "
+                                    "r6-confirmatory artifact stage first."
+                                )
+                            if not supported:
                                 continue
                             payload = {
                                 **variant,
@@ -69,6 +86,10 @@ def plan_tasks(
                                 "seed": int(seed),
                                 "quick": bool(quick),
                             }
+                            if profile.get("experiment_profile"):
+                                payload["experiment_profile"] = str(
+                                    profile["experiment_profile"]
+                                )
                             tasks.append(
                                 experiment_task("level", "train_level", payload)
                             )

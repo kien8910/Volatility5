@@ -28,6 +28,7 @@ STAGE_GROUPS: dict[str, list[str]] = {
         "build_prototypes",
         "aggregate_features",
     ],
+    "r6-confirmatory": ["build_fold_representations"],
     "targets": ["train_targets"],
     "evaluate": ["evaluate_targets", "analyze_prototypes", "placebo_tests"],
 }

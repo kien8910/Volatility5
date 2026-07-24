@@ -13,6 +13,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src import (  # noqa: E402
+    evaluate_r6_confirmatory,
     evaluate_original_targets,
     prepare_targets,
     train_sector_targets,
@@ -66,6 +67,14 @@ def parse_args() -> argparse.Namespace:
         "--full",
         action="store_true",
         help="Full seeds/folds/representations/model experiment grid.",
+    )
+    mode.add_argument(
+        "--r6-confirmatory",
+        action="store_true",
+        help=(
+            "Locked R6 follow-up: 3 chronological folds x 5 paired "
+            "prototype/model seeds against fixed comparators."
+        ),
     )
     parser.add_argument(
         "--resume",
@@ -142,7 +151,20 @@ def _prepare_tasks() -> list[TaskSpec]:
     ]
 
 
-def _evaluation_tasks(config: Mapping[str, Any]) -> list[TaskSpec]:
+def _evaluation_tasks(
+    config: Mapping[str, Any], mode: str
+) -> list[TaskSpec]:
+    if mode == "r6_confirmatory":
+        return [
+            TaskSpec(
+                stage="evaluate",
+                action="r6_confirmatory",
+                config={"experiment_profile": mode},
+                required=True,
+                weight=1.0,
+                outputs=evaluate_r6_confirmatory.evaluation_outputs(),
+            ).with_id()
+        ]
     outputs = evaluate_original_targets.evaluation_outputs(config)
     return [
         TaskSpec(
@@ -182,8 +204,20 @@ def plan_all_tasks(
     *,
     quick: bool,
     stage: str = "all",
+    mode: str = "quick",
 ) -> list[TaskSpec]:
-    requested = set(STAGES if stage == "all" else [stage])
+    enabled = tuple(profile.get("enabled_stages", STAGES))
+    unknown_enabled = sorted(set(enabled).difference(STAGES))
+    if unknown_enabled:
+        raise ValueError(
+            f"Profile contains unknown enabled stages: {unknown_enabled}"
+        )
+    if stage != "all" and stage not in enabled:
+        raise ValueError(
+            f"Stage {stage!r} is disabled for experiment mode {mode!r}; "
+            f"choose from {enabled}."
+        )
+    requested = set(enabled if stage == "all" else [stage])
     tasks: list[TaskSpec] = []
     if "prepare" in requested:
         tasks.extend(_prepare_tasks())
@@ -210,7 +244,7 @@ def plan_all_tasks(
             train_sector_targets.plan_tasks(config, profile, quick=quick)
         )
     if "evaluate" in requested:
-        tasks.extend(_evaluation_tasks(config))
+        tasks.extend(_evaluation_tasks(config, mode))
     return tasks
 
 
@@ -277,6 +311,8 @@ def _execute(
     if task.stage == "prepare":
         return prepare_targets.run_action(task.action, config)
     if task.stage == "evaluate":
+        if task.action == "r6_confirmatory":
+            return evaluate_r6_confirmatory.run(config)
         return evaluate_original_targets.run_action(
             task.action, config, mode=mode
         )
@@ -311,7 +347,33 @@ def _best_representation(
 def _print_completion_report(
     config: Mapping[str, Any],
     summary: Mapping[str, Any],
+    mode: str,
 ) -> None:
+    if mode == "r6_confirmatory":
+        decision_path = project_path(
+            config,
+            "outputs",
+            "tables",
+            "r6_confirmatory_decision.csv",
+        )
+        if not decision_path.exists():
+            return
+        row = read_table(decision_path).iloc[0]
+        print("\nR6 CONFIRMATORY EXPERIMENT")
+        print(f"Completed tasks: {summary['completed_tasks']}")
+        print(f"Failed tasks: {summary['failed_tasks']}")
+        print(f"Skipped tasks: {summary['skipped_tasks']}")
+        print(
+            f"Grid: {int(row['fold_count'])} folds x "
+            f"{int(row['prototype_seed_count'])} paired seeds"
+        )
+        print(
+            "All fixed comparisons passed: "
+            f"{bool(row['all_comparisons_passed'])}"
+        )
+        print(f"Decision: {row['decision']}")
+        print(f"Next step: {row['next_step']}")
+        return
     decision_path = project_path(
         config,
         "outputs",
@@ -430,7 +492,13 @@ def main() -> None:
     args = parse_args()
     config = load_config(args.config)
     ensure_directories(config)
-    mode = "full" if args.full else "quick"
+    mode = (
+        "r6_confirmatory"
+        if args.r6_confirmatory
+        else "full"
+        if args.full
+        else "quick"
+    )
     profile = config[mode]
     set_global_seed(
         int(config["project"]["seed"]),
@@ -446,6 +514,7 @@ def main() -> None:
         profile,
         quick=(mode == "quick"),
         stage=args.stage,
+        mode=mode,
     )
     tasks = filter_tasks(all_tasks, args)
     logger.info(
@@ -496,10 +565,9 @@ def main() -> None:
                 json.dumps(summary["failures"], indent=2, default=str),
             )
         if integrity_failure is None and any(
-            task.stage == "evaluate" and task.action == "report"
-            for task in tasks
+            task.stage == "evaluate" for task in tasks
         ):
-            _print_completion_report(config, summary)
+            _print_completion_report(config, summary, mode)
     finally:
         tracker.close()
     if integrity_failure is not None:

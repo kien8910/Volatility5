@@ -111,6 +111,32 @@ checkpoint model hiện có; không chọn lại model bằng test.
 
 ## Chạy bản đầy đủ và lọc grid
 
+## Xác nhận R6 trên 3 folds x 5 seeds
+
+Trước tiên tạo các representation theo fold trong project residual:
+
+```bash
+python fintexts_semiconductor_prototype/run_pipeline.py --stage r6-confirmatory --config fintexts_semiconductor_prototype/config/config_r6_confirmatory.yaml
+```
+
+Sau đó chạy grid mức volatility đã khóa:
+
+```bash
+python original_volatility_targets/run_original_volatility_pipeline.py --stage level --r6-confirmatory --resume
+python original_volatility_targets/run_original_volatility_pipeline.py --stage evaluate --r6-confirmatory --resume
+```
+
+Profile này tạo đúng `9 representations x 3 folds x 5 paired seeds = 135`
+task: R6 được so sánh cố định với R0, R3, R4, R9, R10, R11, P_LAGGED và
+P_PERMUTED. Model duy nhất là Ridge `alpha=10`, input là `price_plus_text`
+(R0 dùng price-only), family duy nhất là `grid_k4_pca64_tau0p1`.
+
+Các bảng riêng được ghi với tiền tố `r6_confirmatory_` trong
+`original_volatility_targets/outputs/tables`. Báo cáo chỉ phát
+`CONFIRMATORY-PASS` hoặc `CONFIRMATORY-FAIL`; nó không đọc test holdout và
+không tự nâng kết luận thành GO. Chỉ khi PASS mới khóa cấu hình và thực hiện
+một lần đánh giá holdout cuối.
+
 ```bash
 python original_volatility_targets/run_original_volatility_pipeline.py --stage all --full
 ```

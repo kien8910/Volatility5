@@ -551,16 +551,23 @@ def task_split_frames(
         validation_end = pd.Timestamp(row["validation_end"])
         if not train_end < validation_start:
             raise AssertionError(f"Fold {fold} overlaps train and validation")
+        # chronological_folds.csv is defined from target_date in the residual
+        # project. Filtering feature_date here shifts each boundary by one
+        # trading day and makes it disagree with fold-fitted text artifacts.
+        date_column = "target_date"
         train = frame.loc[
-            frame["feature_date"].between(train_start, train_end)
+            frame[date_column].between(train_start, train_end)
         ].copy()
         validation = frame.loc[
-            frame["feature_date"].between(validation_start, validation_end)
+            frame[date_column].between(validation_start, validation_end)
         ].copy()
         test = frame.iloc[0:0].copy()
     if train.empty or validation.empty:
         raise ValueError(f"Task split {fold} has empty train/validation data")
-    if not train["feature_date"].max() < validation["feature_date"].min():
+    chronology_column = (
+        "target_date" if str(fold) != "holdout" else "feature_date"
+    )
+    if not train[chronology_column].max() < validation[chronology_column].min():
         raise AssertionError(f"Task split {fold} violates chronology")
     if not test.empty and not validation["feature_date"].max() < test["feature_date"].min():
         raise AssertionError(f"Task split {fold} validation/test overlap")

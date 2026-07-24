@@ -1,0 +1,46 @@
+# Locked follow-up for the selected R6 family. It reuses cached market/news
+# embeddings from the light run, but refits every train-dependent transform
+# independently in each chronological fold.
+extends: config_light.yaml
+
+project:
+  name: fintexts_semiconductor_r6_confirmatory
+  seed: 11
+  artifact_profile: light
+
+prototype:
+  k_values: [4]
+  pca_dims: [64]
+  temperatures: [0.10]
+  preferred_k: 4
+  preferred_pca_dim: 64
+  preferred_temperature: 0.10
+  n_init: 10
+  max_iter: 250
+  pooling: mean
+  pooling_options: [mean]
+  fit_stability_seeds: true
+  build_fold_codebooks: true
+  build_fold_codebooks_all_seeds: true
+  fold_grid_mode: preferred
+  response_aware:
+    enabled: false
+
+robustness:
+  seeds: [11, 29, 47, 71, 101]
+  chronological_folds: 3
+
+r6_confirmatory:
+  representation_variant_family: grid_k4_pca64_tau0p1
+  folds: [1, 2, 3]
+  seeds: [11, 29, 47, 71, 101]
+  pooling: mean
+  representations:
+    - R3
+    - R4
+    - R6
+    - R9
+    - R10
+    - R11
+    - P_LAGGED
+    - P_PERMUTED

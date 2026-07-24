@@ -52,6 +52,21 @@ class PreparedData:
     qualifies_for_robustness: bool
 
 
+FOLD_MANIFEST_REPRESENTATIONS = {
+    "R3",
+    "R4",
+    "R5",
+    "R6",
+    "R7",
+    "R8",
+    "R9",
+    "R10",
+    "R11",
+    "P_LAGGED",
+    "P_PERMUTED",
+}
+
+
 def experiment_task(
     stage: str,
     action: str,
@@ -97,7 +112,10 @@ def representation_row(
     seed: int | None = None,
     representation_variant_family: str | None = None,
 ) -> pd.Series:
-    if str(fold) != "holdout" and representation in {"R5", "R6", "R7"}:
+    if (
+        str(fold) != "holdout"
+        and representation in FOLD_MANIFEST_REPRESENTATIONS
+    ):
         path = resolve_shared_file(
             config,
             str(config["shared"]["fold_representation_manifest"]),
@@ -186,9 +204,9 @@ def fold_task_supported(
 ) -> bool:
     """Return False instead of ever evaluating a fold with future-fitted text."""
 
-    if str(fold) == "holdout" or representation in {"R0", "R1", "R2", "R4"}:
+    if str(fold) == "holdout" or representation in {"R0", "R1", "R2"}:
         return True
-    if representation not in {"R5", "R6", "R7"}:
+    if representation not in FOLD_MANIFEST_REPRESENTATIONS:
         return False
     try:
         representation_row(
@@ -209,8 +227,45 @@ def plan_representation_variants(
     representations: Sequence[str],
     *,
     quick: bool,
+    fixed_family: str | None = None,
 ) -> list[dict[str, str]]:
     catalog = load_representation_catalog(config)
+    if fixed_family is not None:
+        rows: list[dict[str, str]] = []
+        for representation in representations:
+            name = str(representation)
+            if name == "R0":
+                selected = selected_representation_rows(
+                    catalog, [name], selected_only=True
+                )
+                if len(selected) != 1:
+                    raise ValueError(
+                        "The confirmatory grid requires exactly one selected R0."
+                    )
+                row = selected.iloc[0]
+                rows.append(
+                    {
+                        "representation": name,
+                        "representation_variant": str(
+                            row["representation_variant"]
+                        ),
+                        "representation_variant_family": str(
+                            row.get(
+                                "representation_variant_family",
+                                row["representation_variant"],
+                            )
+                        ),
+                    }
+                )
+            else:
+                rows.append(
+                    {
+                        "representation": name,
+                        "representation_variant": str(fixed_family),
+                        "representation_variant_family": str(fixed_family),
+                    }
+                )
+        return rows
     rows = selected_representation_rows(
         catalog, representations, selected_only=quick
     )
@@ -328,7 +383,7 @@ def prepare_stock_data(
     )
     fold = str(task.config["fold"])
     fit_scope = str(row.get("fit_split", "train"))
-    train_dependent = representation in {"R3", "R5", "R6", "R7", "R8", "R9", "R10", "R11"}
+    train_dependent = representation in FOLD_MANIFEST_REPRESENTATIONS
     fold_safe = (
         fold == "holdout"
         or not train_dependent

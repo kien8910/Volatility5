@@ -203,6 +203,26 @@ không chỉ được xuất để audit.
 
 ## Event, embedding và prototype
 
+### Artifact xác nhận riêng cho R6
+
+Sau khi bản light đã có market panel, canonical events và embedding cache, tạo
+artifact fold-safe cho family đã khóa `K=4, PCA=64, tau=0.1` bằng:
+
+```bash
+python run_pipeline.py --stage r6-confirmatory --config config/config_r6_confirmatory.yaml
+```
+
+Stage này không train target. Nó fit lại PCA/prototype riêng trong train của
+từng fold, với đúng 3 chronological folds và 5 seed `11, 29, 47, 71, 101`.
+Sau đó nó materialize R3, R4, R6, R9, R10, R11, P_LAGGED và P_PERMUTED trên
+cùng phạm vi fold. Tiến trình từng seed và từng ô fold-seed được ghi vào
+`runs/light/outputs/logs/pipeline.log`; bảng kiểm tra độ đầy đủ nằm ở
+`runs/light/outputs/tables/r6_confirmatory_artifact_summary.csv`.
+
+Không chạy lại `--stage prototypes` bằng config xác nhận này: stage
+`r6-confirmatory` chỉ bổ sung artifact theo fold và giữ nguyên bộ feature
+holdout hiện có.
+
 Event canonical có:
 
 ```text

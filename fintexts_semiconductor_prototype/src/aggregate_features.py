@@ -1133,12 +1133,15 @@ def aggregate_fold_features(
     representation_variant_family: str,
     prototype_seed: int | None = None,
     pooling: str | None = None,
+    representations: Sequence[str] | None = None,
 ) -> dict[str, Path]:
-    """Materialize R5/R6/R7 from a codebook fitted inside one fold.
+    """Materialize fold-safe representations from one fold-train codebook.
 
     The caller supplies a hyperparameter *family* chosen without looking at
     test. Prototype seed remains a replication dimension, not a selectable
-    hyperparameter.
+    hyperparameter. PCA, random projection, random-prototype and shuffled-news
+    comparators are rebuilt inside the same fold, so no main-train transform is
+    reused for an earlier validation window.
     """
 
     seed = int(
@@ -1219,6 +1222,9 @@ def aggregate_fold_features(
     soft: dict[str, np.ndarray] = {}
     hard: dict[str, np.ndarray] = {}
     candidate_events = events.copy()
+    # Erase the main holdout split before assigning fold roles. Retaining it
+    # here would let fold-PCA see later main-train events.
+    candidate_events["split"] = "outside_fold"
     for diagnostic in (
         "assignment_entropy",
         "novelty",
@@ -1229,6 +1235,7 @@ def aggregate_fold_features(
         candidate_events[diagnostic] = np.nan
     assigned_event_mask = np.zeros(len(events), dtype=bool)
     candidate_ids: dict[str, str] = {}
+    prototype_dims: dict[str, int] = {}
     for level in NEWS_LEVELS:
         row = by_level[level]
         candidate_ids[level] = str(row.candidate_id)
@@ -1241,8 +1248,26 @@ def aggregate_fold_features(
             raise ValueError(
                 f"Fold candidate {row.candidate_id} has stale event ordering."
             )
+        if "fold_role" not in arrays.files:
+            raise ValueError(
+                f"Fold candidate {row.candidate_id} lacks fold_role; rebuild "
+                "fold codebooks with the current pipeline."
+            )
+        fold_role = arrays["fold_role"].astype(int)
+        if fold_role.shape != (len(event_indices),):
+            raise ValueError(
+                f"Fold candidate {row.candidate_id} has invalid fold_role shape."
+            )
+        if not np.isin(fold_role, [0, 1]).all():
+            raise ValueError(
+                f"Fold candidate {row.candidate_id} contains unknown fold roles."
+            )
+        candidate_events.loc[event_indices, "split"] = np.where(
+            fold_role == 0, "train", "validation"
+        )
         assigned_event_mask[event_indices] = True
         k = int(row.k)
+        prototype_dims[level] = k
         soft_matrix = np.zeros((len(events), k), dtype=np.float32)
         hard_matrix = np.zeros((len(events), k), dtype=np.float32)
         soft_matrix[event_indices] = arrays["soft_assignment"].astype(np.float32)
@@ -1276,35 +1301,136 @@ def aggregate_fold_features(
         fold_market,
         seed,
     )
+    shuffled_date_edges = _build_edges(
+        candidate_events.loc[assigned_event_mask],
+        tickers,
+        "shuffled_date",
+        fold_market,
+        seed,
+        shuffle_holdout_dates=True,
+    )
+    shuffled_ticker_edges = _build_edges(
+        candidate_events.loc[assigned_event_mask],
+        tickers,
+        "shuffled_ticker",
+        fold_market,
+        seed,
+    )
     selected_pooling = str(
         pooling
         or _nested(config, "prototype", "pooling", default="mean")
     )
-    outputs = _prototype_features_for_pool(
+    half_life = float(
+        _nested(
+            config,
+            "prototype",
+            "exponential_half_life_days",
+            default=3.0,
+        )
+    )
+    max_lag = int(
+        _nested(config, "prototype", "max_lag_days", default=5)
+    )
+    sentinel = float(
+        _nested(
+            config,
+            "prototype",
+            "days_since_sentinel",
+            default=3650.0,
+        )
+    )
+    pca, random_projection, _ = _fit_embedding_comparators(
+        config,
+        candidate_events,
+        embeddings,
+        prototype_dims,
+        seed,
+    )
+    random_prototype = _random_prototype_placebo(
+        candidate_events,
+        hard,
+        seed,
+    )
+    matrices = {
+        "soft": soft,
+        "hard": hard,
+        "random_prototype": random_prototype,
+        "pca": pca,
+        "random_projection": random_projection,
+    }
+    true_outputs = _features_for_pool(
         fold_market,
         candidate_events,
+        embeddings,
         edges,
+        selected_pooling,
+        matrices,
+        half_life,
+        max_lag,
+        sentinel,
+    )
+    date_outputs = _prototype_features_for_pool(
+        fold_market,
+        candidate_events,
+        shuffled_date_edges,
         selected_pooling,
         soft,
         hard,
-        float(
-            _nested(
-                config,
-                "prototype",
-                "exponential_half_life_days",
-                default=3.0,
-            )
-        ),
-        int(_nested(config, "prototype", "max_lag_days", default=5)),
-        float(
-            _nested(
-                config,
-                "prototype",
-                "days_since_sentinel",
-                default=3650.0,
-            )
-        ),
+        half_life,
+        max_lag,
+        sentinel,
     )
+    ticker_outputs = _prototype_features_for_pool(
+        fold_market,
+        candidate_events,
+        shuffled_ticker_edges,
+        selected_pooling,
+        soft,
+        hard,
+        half_life,
+        max_lag,
+        sentinel,
+    )
+    available_outputs = {
+        **true_outputs,
+        # Dimension-matched placebos for R6: the semantic codebook is fixed,
+        # while only dates/tickers are shuffled inside the current fold.
+        "R10": date_outputs["R6"],
+        "R11": ticker_outputs["R6"],
+    }
+    requested = tuple(
+        representations
+        or (
+            "R5",
+            "R6",
+            "R7",
+        )
+    )
+    supported = {
+        "R3",
+        "R4",
+        "R5",
+        "R6",
+        "R7",
+        "R9",
+        "R10",
+        "R11",
+        "P_LAGGED",
+        "P_PERMUTED",
+    }
+    unknown = sorted(set(requested).difference(supported))
+    if unknown:
+        raise ValueError(
+            f"Unsupported fold representations requested: {unknown}"
+        )
+    outputs = {
+        representation: (
+            available_outputs["R6"]
+            if representation in {"P_LAGGED", "P_PERMUTED"}
+            else available_outputs[representation]
+        )
+        for representation in requested
+    }
     output_dir = project_path(
         config,
         (
@@ -1345,6 +1471,15 @@ def aggregate_fold_features(
                 "fit_scope": "fold_train_only",
                 "events_variant": events_variant,
                 "selected": False,
+                "placebo": representation
+                in {"R9", "R10", "R11", "P_LAGGED", "P_PERMUTED"},
+                "placebo_kind": {
+                    "R9": "random_prototype_fold_train_distribution",
+                    "R10": "within_fold_split_shuffled_date",
+                    "R11": "fold_seed_deranged_ticker",
+                    "P_LAGGED": "lagged_fold_r6",
+                    "P_PERMUTED": "within_fold_split_permuted_r6",
+                }.get(representation, ""),
             }
         )
     manifest_path = project_path(
