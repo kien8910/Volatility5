@@ -38,9 +38,14 @@ models:
   uncertainty: [gaussian]
   ridge_alphas: [1.0]
   logistic_cs: [1.0]
+  mlp_hidden_sizes: [[64]]
   max_epochs: 60
   patience: 8
   run_all_robustness_seeds: false
+  progress:
+    enabled: true
+    log_every_jobs: 5
+    heartbeat_seconds: 15
   validation_screening:
     top_n_families: 1
 

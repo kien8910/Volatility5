@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -91,6 +93,139 @@ class Candidate:
             {"model": self.model, **self.parameters}, sort_keys=True
         )
         return f"{self.model}-{sha256_text(payload)[:10]}"
+
+
+def _format_duration(seconds: float | None) -> str:
+    if seconds is None or not np.isfinite(seconds) or seconds < 0:
+        return "unknown"
+    rounded = int(round(seconds))
+    hours, remainder = divmod(rounded, 3600)
+    minutes, seconds_part = divmod(remainder, 60)
+    if hours:
+        return f"{hours:d}h{minutes:02d}m{seconds_part:02d}s"
+    if minutes:
+        return f"{minutes:d}m{seconds_part:02d}s"
+    return f"{seconds_part:d}s"
+
+
+class _ProgressReporter:
+    """Thread-safe phase progress with periodic heartbeat and ETA logging."""
+
+    def __init__(
+        self,
+        logger: Any,
+        phase: str,
+        total: int,
+        *,
+        enabled: bool,
+        log_every_jobs: int,
+        heartbeat_seconds: float,
+    ) -> None:
+        self.logger = logger
+        self.phase = phase
+        self.total = max(0, int(total))
+        self.enabled = bool(enabled)
+        self.log_every_jobs = max(1, int(log_every_jobs))
+        self.heartbeat_seconds = max(5.0, float(heartbeat_seconds))
+        self.completed = 0
+        self.current_label = "preparing"
+        self.started = time.monotonic()
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def __enter__(self) -> "_ProgressReporter":
+        if not self.enabled:
+            return self
+        self.logger.info(
+            "PROGRESS %s started | total_jobs=%d | heartbeat=%.0fs",
+            self.phase,
+            self.total,
+            self.heartbeat_seconds,
+        )
+        self._thread = threading.Thread(
+            target=self._heartbeat_loop,
+            name=f"progress-{self.phase}",
+            daemon=True,
+        )
+        self._thread.start()
+        return self
+
+    def start(self) -> "_ProgressReporter":
+        return self.__enter__()
+
+    def finish(self) -> None:
+        self.__exit__(None, None, None)
+
+    def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=min(5.0, self.heartbeat_seconds))
+        if self.enabled:
+            self._emit("aborted" if exc_type is not None else "finished")
+
+    def start_job(self, label: str) -> None:
+        if not self.enabled:
+            return
+        with self._lock:
+            self.current_label = str(label)
+
+    def advance(self) -> None:
+        if not self.enabled:
+            return
+        with self._lock:
+            self.completed += 1
+            completed = self.completed
+            total = self.total
+        if (
+            completed == 1
+            or completed == total
+            or completed % self.log_every_jobs == 0
+        ):
+            self._emit("update")
+
+    def _heartbeat_loop(self) -> None:
+        while not self._stop.wait(self.heartbeat_seconds):
+            self._emit("heartbeat")
+
+    def _emit(self, event: str) -> None:
+        with self._lock:
+            completed = self.completed
+            total = self.total
+            label = self.current_label
+        elapsed = max(time.monotonic() - self.started, 1.0e-9)
+        rate = completed / elapsed
+        remaining = (
+            max(total - completed, 0) / rate
+            if completed > 0 and total >= completed and rate > 0
+            else None
+        )
+        percentage = 100.0 * completed / total if total else 100.0
+        self.logger.info(
+            "PROGRESS %s %s | %d/%d (%.1f%%) | elapsed=%s | ETA=%s | current=%s",
+            self.phase,
+            event,
+            completed,
+            total,
+            percentage,
+            _format_duration(elapsed),
+            _format_duration(remaining),
+            label,
+        )
+
+
+def _progress_options(config: Mapping[str, Any]) -> dict[str, Any]:
+    models = config.get("models", {})
+    if not isinstance(models, Mapping):
+        models = {}
+    progress = models.get("progress", {})
+    if not isinstance(progress, Mapping):
+        progress = {}
+    return {
+        "enabled": bool(progress.get("enabled", True)),
+        "log_every_jobs": int(progress.get("log_every_jobs", 10)),
+        "heartbeat_seconds": float(progress.get("heartbeat_seconds", 30.0)),
+    }
 
 
 def _is_usable_numeric(column: str, series: pd.Series) -> bool:
@@ -279,58 +414,111 @@ def _make_preprocessor(feature_columns: Sequence[str]) -> ColumnTransformer:
 
 def _candidate_grid(target: str, config: Mapping[str, Any]) -> list[Candidate]:
     model_config = config["models"]
+    target_key = (
+        target
+        if target in {"signed", "magnitude", "squared", "uncertainty"}
+        else "spike"
+        if target.startswith("spike")
+        else "regime"
+        if target.startswith("regime")
+        else target
+    )
+    configured_models = {
+        str(value).lower()
+        for value in model_config.get(target_key, [])
+    }
+    known_models = {
+        "signed": {"ridge", "elastic_net", "mlp"},
+        "magnitude": {"ridge", "elastic_net", "mlp"},
+        "squared": {"ridge", "elastic_net", "mlp"},
+        "spike": {"logistic", "weighted_logistic", "mlp"},
+        "regime": {"multinomial_logistic", "mlp"},
+        "uncertainty": {"gaussian", "student_t"},
+    }
+    unknown = configured_models.difference(known_models.get(target_key, set()))
+    if unknown:
+        raise ValueError(
+            f"Unsupported models for {target_key}: {sorted(unknown)}"
+        )
+    candidates: list[Candidate] = []
     if target in {"signed", "magnitude", "squared"}:
-        candidates = [
-            Candidate("ridge", {"alpha": float(alpha)})
-            for alpha in model_config["ridge_alphas"]
-        ]
-        candidates += [
-            Candidate(
-                "elastic_net",
-                {"alpha": float(alpha), "l1_ratio": float(l1_ratio)},
+        if "ridge" in configured_models:
+            candidates.extend(
+                Candidate("ridge", {"alpha": float(alpha)})
+                for alpha in model_config["ridge_alphas"]
             )
-            for alpha in model_config["elastic_net_alphas"]
-            for l1_ratio in model_config["elastic_net_l1_ratios"]
-        ]
-        candidates += [
-            Candidate("mlp_regression", {"hidden_sizes": list(hidden)})
-            for hidden in model_config["mlp_hidden_sizes"]
-        ]
-        return candidates
+        if "elastic_net" in configured_models:
+            candidates.extend(
+                Candidate(
+                    "elastic_net",
+                    {
+                        "alpha": float(alpha),
+                        "l1_ratio": float(l1_ratio),
+                    },
+                )
+                for alpha in model_config["elastic_net_alphas"]
+                for l1_ratio in model_config["elastic_net_l1_ratios"]
+            )
+        if "mlp" in configured_models:
+            candidates.extend(
+                Candidate("mlp_regression", {"hidden_sizes": list(hidden)})
+                for hidden in model_config["mlp_hidden_sizes"]
+            )
     if target.startswith("spike"):
-        candidates = [
-            Candidate("logistic", {"C": float(value), "class_weight": None})
-            for value in model_config["logistic_cs"]
-        ]
-        candidates += [
-            Candidate("weighted_logistic", {"C": float(value), "class_weight": "balanced"})
-            for value in model_config["logistic_cs"]
-        ]
-        candidates += [
-            Candidate("mlp_binary", {"hidden_sizes": list(hidden), "weighted": True})
-            for hidden in model_config["mlp_hidden_sizes"]
-        ]
-        return candidates
+        if "logistic" in configured_models:
+            candidates.extend(
+                Candidate(
+                    "logistic",
+                    {"C": float(value), "class_weight": None},
+                )
+                for value in model_config["logistic_cs"]
+            )
+        if "weighted_logistic" in configured_models:
+            candidates.extend(
+                Candidate(
+                    "weighted_logistic",
+                    {"C": float(value), "class_weight": "balanced"},
+                )
+                for value in model_config["logistic_cs"]
+            )
+        if "mlp" in configured_models:
+            candidates.extend(
+                Candidate(
+                    "mlp_binary",
+                    {"hidden_sizes": list(hidden), "weighted": True},
+                )
+                for hidden in model_config["mlp_hidden_sizes"]
+            )
     if target.startswith("regime"):
-        candidates = [
-            Candidate("multinomial_logistic", {"C": float(value)})
-            for value in model_config["logistic_cs"]
-        ]
-        candidates += [
-            Candidate("mlp_multiclass", {"hidden_sizes": list(hidden)})
-            for hidden in model_config["mlp_hidden_sizes"]
-        ]
-        return candidates
+        if "multinomial_logistic" in configured_models:
+            candidates.extend(
+                Candidate("multinomial_logistic", {"C": float(value)})
+                for value in model_config["logistic_cs"]
+            )
+        if "mlp" in configured_models:
+            candidates.extend(
+                Candidate("mlp_multiclass", {"hidden_sizes": list(hidden)})
+                for hidden in model_config["mlp_hidden_sizes"]
+            )
     if target == "uncertainty":
-        return [
+        candidates.extend(
             Candidate(
                 distribution,
-                {"hidden_sizes": list(hidden), "distribution": distribution},
+                {
+                    "hidden_sizes": list(hidden),
+                    "distribution": distribution,
+                },
             )
             for distribution in config["uncertainty"]["distributions"]
+            if str(distribution).lower() in configured_models
             for hidden in model_config["mlp_hidden_sizes"]
-        ]
-    raise ValueError(f"Unsupported target: {target}")
+        )
+    if not candidates:
+        raise ValueError(
+            f"No model candidates enabled for target {target!r}; "
+            f"check models.{target_key}."
+        )
+    return candidates
 
 
 def _target_column(target: str) -> str:
@@ -1029,18 +1217,40 @@ def run(config: dict[str, Any]) -> dict[str, Path]:
         else:
             logger.warning("Skipping %s because no feature artifact was found", missing)
 
+    progress_options = _progress_options(config)
+    planned_input_sets = sum(
+        1 if artifact[0] == "R0" else 2
+        for artifact in execution_artifacts
+    )
+    planned_screening_jobs = planned_input_sets * len(targets)
+    logger.info(
+        "Target training started | residual_rows=%d | artifacts=%d | "
+        "targets=%d | seeds=%d | planned_screening_jobs=%d",
+        len(residuals),
+        len(execution_artifacts),
+        len(targets),
+        len(seeds),
+        planned_screening_jobs,
+    )
+
     screening_config = config["models"].get("validation_screening", {})
     screening_enabled = bool(screening_config.get("enabled", True))
     screening_selected: set[tuple[str, str, str, str, str]] | None = None
     tables = project_path(config, "outputs", "tables")
     screening_audit_path = tables / "target_screening_manifest.csv"
     if screening_enabled:
-        top_n = max(2, int(screening_config.get("top_n_families", 2)))
+        top_n = max(1, int(screening_config.get("top_n_families", 2)))
         inner_fraction = float(screening_config.get("inner_fraction", 0.15))
         minimum_prefix_dates = int(
             screening_config.get("minimum_prefix_dates", 63)
         )
         screening_rows: list[dict[str, Any]] = []
+        screening_progress = _ProgressReporter(
+            logger,
+            "screening",
+            planned_screening_jobs,
+            **progress_options,
+        ).start()
         for (
             representation,
             representation_variant,
@@ -1048,6 +1258,9 @@ def run(config: dict[str, Any]) -> dict[str, Path]:
             prototype_seed,
             path,
         ) in execution_artifacts:
+            screening_progress.start_job(
+                f"load {representation}/{representation_variant}"
+            )
             if path is not None and not path.exists():
                 raise FileNotFoundError(
                     f"Representation artifact in manifest does not exist: {path}"
@@ -1079,6 +1292,10 @@ def run(config: dict[str, Any]) -> dict[str, Path]:
                     representation_variant_family
                 )
                 for target in targets:
+                    screening_progress.start_job(
+                        f"{target} | {representation}/"
+                        f"{representation_variant}/{input_variant}"
+                    )
                     metric, score, larger, screening_model = (
                         _cheap_screening_score(
                             target,
@@ -1133,6 +1350,8 @@ def run(config: dict[str, Any]) -> dict[str, Path]:
                             "uses_test": False,
                         }
                     )
+                    screening_progress.advance()
+        screening_progress.finish()
         screening_audit, screening_selected = _rank_screening_families(
             screening_rows, top_n, logger
         )
@@ -1174,6 +1393,48 @@ def run(config: dict[str, Any]) -> dict[str, Path]:
             index=False,
         )
 
+    planned_full_fit_jobs = 0
+    for (
+        representation,
+        _representation_variant,
+        representation_variant_family,
+        _prototype_seed,
+        _path,
+    ) in execution_artifacts:
+        input_variants = (
+            ("price_only",)
+            if representation == "R0"
+            else ("price_plus_text", "text_only")
+        )
+        experiment_group = _experiment_group(
+            representation_variant_family
+        )
+        for input_variant in input_variants:
+            for target in targets:
+                if (
+                    screening_selected is not None
+                    and (
+                        target,
+                        representation,
+                        input_variant,
+                        experiment_group,
+                        representation_variant_family,
+                    )
+                    not in screening_selected
+                ):
+                    continue
+                planned_full_fit_jobs += len(_candidate_grid(target, config))
+                planned_full_fit_jobs += max(len(seeds) - 1, 0)
+    logger.info(
+        "Full validation search plan | candidate_fits=%d",
+        planned_full_fit_jobs,
+    )
+    validation_progress = _ProgressReporter(
+        logger,
+        "validation-search",
+        planned_full_fit_jobs,
+        **progress_options,
+    ).start()
     for (
         representation,
         representation_variant,
@@ -1181,6 +1442,9 @@ def run(config: dict[str, Any]) -> dict[str, Path]:
         prototype_seed,
         path,
     ) in execution_artifacts:
+        validation_progress.start_job(
+            f"load {representation}/{representation_variant}"
+        )
         if path is not None and not path.exists():
             raise FileNotFoundError(
                 f"Representation artifact in manifest does not exist: {path}"
@@ -1236,6 +1500,11 @@ def run(config: dict[str, Any]) -> dict[str, Path]:
                         else [primary_choices[target]]
                     )
                     for candidate in candidate_grid:
+                        validation_progress.start_job(
+                            f"{target} | {representation}/"
+                            f"{representation_variant}/{input_variant} | "
+                            f"seed={seed} | {candidate.identifier}"
+                        )
                         model = _fit_candidate(
                             candidate, x_train, train, target, config, seed
                         )
@@ -1277,6 +1546,7 @@ def run(config: dict[str, Any]) -> dict[str, Path]:
                         )
                         if best is None or _is_better(score, best[2], larger):
                             best = (candidate, model, score, metric_name, larger)
+                        validation_progress.advance()
                     if best is None or not np.isfinite(best[2]):
                         logger.warning(
                             "No finite validation candidate for %s/%s/%s/%s",
@@ -1330,6 +1600,7 @@ def run(config: dict[str, Any]) -> dict[str, Path]:
                             "test": test,
                         }
                     )
+    validation_progress.finish()
 
     # K/PCA/temperature/pooling is selected on validation, but a stochastic
     # prototype seed is a replicate rather than a tunable configuration.  Mean
@@ -1389,26 +1660,38 @@ def run(config: dict[str, Any]) -> dict[str, Path]:
     if not best_family_jobs:
         raise RuntimeError("Validation did not lock any representation configuration")
 
-    locked_config_by_repeat: dict[tuple[str, str, str, str, int], str] = {}
+    locked_pending_jobs: list[dict[str, Any]] = []
     for job in pending_test_jobs:
-        key = (
+        selection_key = (
             str(job["target"]),
             str(job["representation"]),
             str(job["input_variant"]),
             _experiment_group(str(job["representation_variant_family"])),
         )
-        locked = best_family_jobs.get(key)
+        locked = best_family_jobs.get(selection_key)
         if locked is None:
             logger.warning(
                 "Skipping unlocked validation group with no finite family score: %s",
-                key,
+                selection_key,
             )
             continue
         if (
             str(job["representation_variant_family"])
-            != str(locked["representation_variant_family"])
+            == str(locked["representation_variant_family"])
         ):
-            continue
+            locked_pending_jobs.append(job)
+    logger.info(
+        "Locked test prediction plan | jobs=%d",
+        len(locked_pending_jobs),
+    )
+    test_progress = _ProgressReporter(
+        logger,
+        "locked-test",
+        len(locked_pending_jobs),
+        **progress_options,
+    ).start()
+    locked_config_by_repeat: dict[tuple[str, str, str, str, int], str] = {}
+    for job in locked_pending_jobs:
         target = str(job["target"])
         representation = str(job["representation"])
         representation_variant = str(job["representation_variant"])
@@ -1419,6 +1702,10 @@ def run(config: dict[str, Any]) -> dict[str, Path]:
         input_variant = str(job["input_variant"])
         seed = int(job["seed"])
         chosen = job["candidate"]
+        test_progress.start_job(
+            f"{target} | {representation}/{representation_variant}/"
+            f"{input_variant} | seed={seed}"
+        )
         processor = job["processor"]
         validation_model = job["validation_model"]
         validation_prediction = job["validation_prediction"]
@@ -1530,9 +1817,18 @@ def run(config: dict[str, Any]) -> dict[str, Path]:
             job["validation_primary_value"],
             test_score,
         )
+        test_progress.advance()
+    test_progress.finish()
 
     if not prediction_pieces:
         raise RuntimeError("No target models were trained; check representation artifacts")
+    logger.info(
+        "Finalizing target artifacts | prediction_blocks=%d | manifest_rows=%d "
+        "| selected_models=%d",
+        len(prediction_pieces),
+        len(manifest_rows),
+        len(selected_models),
+    )
     predictions = pd.concat(prediction_pieces, ignore_index=True)
     manifest = pd.DataFrame(manifest_rows)
     validation_mask = predictions["evaluation_split"].eq("validation")
@@ -1610,6 +1906,13 @@ def run(config: dict[str, Any]) -> dict[str, Path]:
         for key, value in selected_models.items()
     }
     audit_path = write_json(feature_audit, models / "target_feature_audit.json")
+    logger.info(
+        "Target training artifacts completed | predictions=%s | manifest=%s "
+        "| models=%s",
+        prediction_path,
+        manifest_path,
+        model_path,
+    )
     return {
         "target_predictions": prediction_path,
         "target_screening_manifest": screening_audit_path,

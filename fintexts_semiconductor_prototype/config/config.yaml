@@ -203,6 +203,10 @@ models:
   min_delta: 0.0001
   gradient_clip: 5.0
   run_all_robustness_seeds: true
+  progress:
+    enabled: true
+    log_every_jobs: 10
+    heartbeat_seconds: 30
   validation_screening:
     enabled: true
     # Every K/PCA/temperature/pooling family is first compared on the tail of

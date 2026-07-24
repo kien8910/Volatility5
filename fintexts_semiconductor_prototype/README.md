@@ -117,6 +117,13 @@ vẫn dùng chung để lần chạy full không phải tải hoặc encode lạ
 nhau. Kết luận của pilot là kiểm tra vận hành và tín hiệu sơ bộ, không thay thế
 kết luận robustness của full grid.
 
+Trong `train_targets`, `targets.log` ghi tiến độ riêng cho ba pha
+`screening`, `validation-search` và `locked-test`. Mỗi dòng có số job
+`completed/total`, phần trăm, elapsed time, ETA và job hiện tại. Cấu hình light
+ghi sau mỗi 5 job và heartbeat mỗi 15 giây; có thể điều chỉnh tại
+`models.progress`. Danh sách `models.signed`, `models.spike`, ... được dùng để
+lọc candidate grid, nên pilot thực sự chỉ chạy các model nhỏ đã khai báo.
+
 Luồng khuyến nghị khi chạy từng phần:
 
 1. `download`: tải snapshot Parquet và inspect schema.
