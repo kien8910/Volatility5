@@ -998,9 +998,41 @@ def _daily_cross_stock(
     )
     response = residuals.copy()
     response["date"] = response["feature_date"]
-    merged = day_keys.merge(response, on="date", how="left", validate="one_to_many")
+    day_key_columns = [
+        "date",
+        "candidate_id",
+        "news_level",
+        "prototype_id",
+    ]
+    if day_keys.duplicated(day_key_columns).any():
+        examples = day_keys.loc[
+            day_keys.duplicated(day_key_columns, keep=False),
+            day_key_columns,
+        ].head(5)
+        raise AssertionError(
+            "Prototype day keys are not unique: "
+            f"{examples.to_dict(orient='records')}"
+        )
+    response_key_columns = ["date", "ticker"]
+    if response.duplicated(response_key_columns).any():
+        examples = response.loc[
+            response.duplicated(response_key_columns, keep=False),
+            response_key_columns,
+        ].head(5)
+        raise AssertionError(
+            "Cross-stock residuals are not unique by date/ticker: "
+            f"{examples.to_dict(orient='records')}"
+        )
+    # A date can activate several prototype/level combinations, and every
+    # combination intentionally expands to the ticker cross-section.
+    merged = day_keys.merge(
+        response,
+        on="date",
+        how="left",
+        validate="many_to_many",
+    )
     rows: list[dict[str, Any]] = []
-    group_columns = ["date", "candidate_id", "news_level", "prototype_id"]
+    group_columns = day_key_columns
     for keys_value, group in merged.groupby(group_columns, sort=True, observed=True):
         date, candidate, level, prototype = keys_value
         residual = pd.to_numeric(group["signed_residual"], errors="coerce").to_numpy(dtype=float)
