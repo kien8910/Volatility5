@@ -88,6 +88,35 @@ Xem thứ tự module mà không tải dữ liệu hoặc chạy model:
 python run_pipeline.py --stage all --dry-run
 ```
 
+### Pilot nhẹ trước khi chạy full grid
+
+`config/config_light.yaml` kế thừa toàn bộ quy tắc dữ liệu và leakage từ
+`config.yaml`, nhưng chỉ chạy `K=[4,8]`, PCA 64 chiều, temperature 0.1, mean
+pooling, một model nhỏ cho mỗi target và một seed robustness. Pilot vẫn giữ
+R0–R11, toàn bộ nhóm target, ba chronological fold và các placebo bắt buộc.
+Response-aware prototype được để dành cho full run.
+
+Chạy pilot end-to-end:
+
+```bash
+python run_pipeline.py --stage all --config config/config_light.yaml
+```
+
+Nếu chạy từng stage, phải truyền cùng cấu hình ở mọi lệnh:
+
+```bash
+python run_pipeline.py --stage download --config config/config_light.yaml
+python run_pipeline.py --stage baseline --config config/config_light.yaml
+python run_pipeline.py --stage prototypes --config config/config_light.yaml
+python run_pipeline.py --stage targets --config config/config_light.yaml
+python run_pipeline.py --stage evaluate --config config/config_light.yaml
+```
+
+Artifact pilot được cách ly tại `runs/light/`; raw snapshot và cache embedding
+vẫn dùng chung để lần chạy full không phải tải hoặc encode lại dữ liệu giống
+nhau. Kết luận của pilot là kiểm tra vận hành và tín hiệu sơ bộ, không thay thế
+kết luận robustness của full grid.
+
 Luồng khuyến nghị khi chạy từng phần:
 
 1. `download`: tải snapshot Parquet và inspect schema.

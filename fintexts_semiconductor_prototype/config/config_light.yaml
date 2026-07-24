@@ -1,0 +1,50 @@
+# Lightweight end-to-end pilot. All unspecified settings are inherited from
+# config.yaml, so leakage controls, target definitions and required artifacts
+# remain identical to the full experiment.
+extends: config.yaml
+
+project:
+  name: fintexts_semiconductor_prototype_light
+  artifact_profile: light
+
+prototype:
+  k_values: [4, 8]
+  pca_dims: [64]
+  temperatures: [0.10]
+  preferred_k: 8
+  preferred_pca_dim: 64
+  preferred_temperature: 0.10
+  n_init: 5
+  max_iter: 150
+  pooling: mean
+  pooling_options: [mean]
+  random_prototype_repeats: 1
+  aggregate_all_eligible_candidates: true
+  aggregate_all_prototype_seeds: false
+  generate_all_pooling_representations: false
+  fit_stability_seeds: false
+  build_fold_codebooks: false
+  build_fold_codebooks_all_seeds: false
+  fold_grid_mode: preferred
+  response_aware:
+    enabled: false
+
+models:
+  signed: [ridge]
+  magnitude: [ridge]
+  squared: [ridge]
+  spike: [weighted_logistic]
+  regime: [multinomial_logistic]
+  uncertainty: [gaussian]
+  ridge_alphas: [1.0]
+  logistic_cs: [1.0]
+  max_epochs: 60
+  patience: 8
+  run_all_robustness_seeds: false
+  validation_screening:
+    top_n_families: 1
+
+robustness:
+  seeds: []
+  chronological_folds: 3
+  block_bootstrap_repetitions: 100

@@ -27,6 +27,9 @@ outputs/models/*
 outputs/logs/*
 !outputs/logs/.gitkeep
 
+# Isolated artifacts created by lightweight or future named profiles.
+runs/
+
 config/schema_mapping.yaml
 *.log
 *.tmp

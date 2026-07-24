@@ -31,14 +31,63 @@ from sklearn.metrics import (
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
+def _deep_merge_config(
+    base: Mapping[str, Any],
+    override: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Recursively merge a small experiment profile over the base config."""
+
+    merged: dict[str, Any] = dict(base)
+    for key, value in override.items():
+        if (
+            isinstance(value, Mapping)
+            and isinstance(merged.get(key), Mapping)
+        ):
+            merged[key] = _deep_merge_config(
+                merged[key],  # type: ignore[arg-type]
+                value,
+            )
+        else:
+            merged[key] = value
+    return merged
+
+
+def _load_yaml_config(
+    config_path: Path,
+    active_paths: frozenset[Path] = frozenset(),
+) -> dict[str, Any]:
+    """Load a YAML config, resolving an optional relative ``extends`` chain."""
+
+    config_path = config_path.expanduser().resolve()
+    if config_path in active_paths:
+        chain = " -> ".join(str(path) for path in (*active_paths, config_path))
+        raise ValueError(f"Circular configuration inheritance: {chain}")
+    with config_path.open("r", encoding="utf-8") as handle:
+        loaded = yaml.safe_load(handle)
+    if not isinstance(loaded, dict):
+        raise ValueError(f"Configuration must be a mapping: {config_path}")
+    parent_value = loaded.pop("extends", None)
+    if parent_value is None:
+        return loaded
+    if not isinstance(parent_value, str) or not parent_value.strip():
+        raise ValueError(
+            f"Configuration 'extends' must be a non-empty path: {config_path}"
+        )
+    parent_path = Path(parent_value)
+    if not parent_path.is_absolute():
+        parent_path = config_path.parent / parent_path
+    parent = _load_yaml_config(
+        parent_path,
+        active_paths | frozenset({config_path}),
+    )
+    return _deep_merge_config(parent, loaded)
+
+
 def load_config(path: str | Path | None = None) -> dict[str, Any]:
     """Load YAML configuration and attach absolute project/config paths."""
     config_path = Path(path) if path is not None else PROJECT_ROOT / "config" / "config.yaml"
     config_path = config_path.expanduser().resolve()
-    with config_path.open("r", encoding="utf-8") as handle:
-        config = yaml.safe_load(handle)
-    if not isinstance(config, dict):
-        raise ValueError(f"Configuration must be a mapping: {config_path}")
+    config = _load_yaml_config(config_path)
     config["_config_path"] = str(config_path)
     config["_project_root"] = str(config_path.parent.parent)
     return config
@@ -47,7 +96,34 @@ def load_config(path: str | Path | None = None) -> dict[str, Any]:
 def project_path(config: Mapping[str, Any], *parts: str | os.PathLike[str]) -> Path:
     """Resolve a path relative to the configured project root."""
     root = Path(str(config.get("_project_root", PROJECT_ROOT))).resolve()
-    return root.joinpath(*map(Path, parts))
+    relative = Path(*map(Path, parts))
+    project_config = config.get("project", {})
+    artifact_profile = (
+        str(project_config.get("artifact_profile", "")).strip()
+        if isinstance(project_config, Mapping)
+        else ""
+    )
+    if artifact_profile:
+        profile_path = Path(artifact_profile)
+        if (
+            artifact_profile in {".", ".."}
+            or profile_path.is_absolute()
+            or len(profile_path.parts) != 1
+            or profile_path.name != artifact_profile
+        ):
+            raise ValueError(
+                "project.artifact_profile must be one safe directory name"
+            )
+        relative_parts = relative.parts
+        is_output = bool(relative_parts and relative_parts[0] == "outputs")
+        is_processed = bool(
+            len(relative_parts) >= 2
+            and relative_parts[0] == "data"
+            and relative_parts[1] == "processed"
+        )
+        if is_output or is_processed:
+            relative = Path("runs") / artifact_profile / relative
+    return root / relative
 
 
 def ensure_directories(paths_or_config: Iterable[str | Path] | Mapping[str, Any]) -> None:
