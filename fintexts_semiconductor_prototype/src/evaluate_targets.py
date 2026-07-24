@@ -815,22 +815,36 @@ def _subgroup_results(
             aggfunc="sum",
             fill_value=0,
         ).reset_index()
+        levels = ["macro", "sector", "related", "target"]
+        exposure_columns = {
+            level: f"news_count_{level}"
+            for level in levels
+        }
+        count_wide = count_wide.rename(columns=exposure_columns)
         enriched = selected.merge(
             count_wide,
             on=["ticker", "feature_date"],
             how="left",
             validate="many_to_one",
         )
-        levels = ["macro", "sector", "related", "target"]
+        missing_grouping = [
+            column for column in grouping if column not in enriched.columns
+        ]
+        if missing_grouping:
+            raise AssertionError(
+                "News-exposure merge removed configuration columns: "
+                f"{missing_grouping}"
+            )
         for level in levels:
-            if level not in enriched.columns:
-                enriched[level] = 0
-            enriched[level] = pd.to_numeric(
-                enriched[level], errors="coerce"
+            count_column = exposure_columns[level]
+            if count_column not in enriched.columns:
+                enriched[count_column] = 0
+            enriched[count_column] = pd.to_numeric(
+                enriched[count_column], errors="coerce"
             ).fillna(0)
             for state, mask in (
-                ("has_news", enriched[level] > 0),
-                ("no_news", enriched[level] <= 0),
+                ("has_news", enriched[count_column] > 0),
+                ("no_news", enriched[count_column] <= 0),
             ):
                 subset = enriched.loc[mask]
                 for keys, group in subset.groupby(grouping, sort=True, dropna=False):
@@ -841,7 +855,9 @@ def _subgroup_results(
                             "selected_on_validation": True,
                             "news_level": level,
                             "news_day_state": state,
-                            "mean_news_count": float(group[level].mean()),
+                            "mean_news_count": float(
+                                group[count_column].mean()
+                            ),
                         }
                     )
                     row.update(evaluate_prediction_group(group, config))
