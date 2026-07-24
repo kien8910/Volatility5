@@ -1,0 +1,170 @@
+project:
+  name: original_volatility_targets
+  seed: 20260724
+  deterministic: true
+  log_level: INFO
+  continue_on_experiment_error: true
+
+shared:
+  residual_project_root: ../fintexts_semiconductor_prototype
+  artifact_profile: light
+  processed_candidates:
+    - runs/light/data/processed
+    - data/processed
+  table_candidates:
+    - runs/light/outputs/tables
+    - outputs/tables
+  embedding_candidates:
+    - data/embeddings
+    - runs/light/data/embeddings
+  market_file: market_supervised.parquet
+  representation_manifest: representation_manifest.csv
+  canonical_events: canonical_events.parquet
+  prototype_assignments: prototype_assignments.parquet
+  fold_representation_manifest: fold_representation_manifest.csv
+  chronological_folds: chronological_folds.csv
+  residual_final_decision: final_decision.csv
+  residual_validation_results: target_comparison_validation.csv
+  residual_test_results: target_comparison_test.csv
+  require_compatible_split: true
+  require_train_fitted_prototypes: true
+
+universe:
+  industry: semiconductor
+  tickers: [ADI, AMAT, AMD, AVGO, INTC, KLAC, LRCX, MU, NVDA, QCOM, TXN]
+
+targets:
+  epsilon: 1.0e-12
+  ticker_spike_quantiles: [0.90, 0.95]
+  regime_primary_quantiles: [0.50, 0.90]
+  regime_alternative_quantiles: [0.33, 0.67]
+  pooled_standardized: true
+  sector_spike_minimum_positive: 12
+  quick_sector_spike_minimum_positive: 5
+  sector_spike_definitions:
+    at_least_3: 3
+    at_least_5: 5
+    at_least_half: 6
+
+features:
+  price_prefixes:
+    - har_
+    - log_variance_lag_
+    - log_variance_roll_
+    - log_return
+    - absolute_log_return
+    - historical_mean_log_variance
+  exclude_tokens:
+    - target_
+    - residual
+    - spike
+    - regime
+    - baseline_prediction
+    - future
+  prototype_representations: [R5, R6, R7, R8]
+  placebo_representations: [R9, R10, R11, P_LAGGED, P_PERMUTED]
+  lagged_placebo_days: 30
+
+quick:
+  representations: [R0, R2, R3, R4, R7, R9, R10, R11]
+  level_models: [ridge]
+  spike_models: [weighted_logistic]
+  regime_models: [multinomial_logistic]
+  uncertainty_models: [gaussian_fixed_mean]
+  sector_models: [ridge, weighted_logistic, multinomial_logistic]
+  seeds: [20260724]
+  folds: [holdout]
+  input_variants: [price_plus_text]
+  max_train_dates: 126
+  max_validation_dates: 30
+  max_test_dates: 30
+  spike_threshold_modes: [ticker]
+  regime_definitions: [q50_q90]
+  sector_representations: [R0, R7, R10]
+
+full:
+  representations: [R0, R1, R2, R3, R4, R5, R6, R7, R8, R9, R10, R11, P_LAGGED, P_PERMUTED]
+  level_models: [historical_mean, ridge, elastic_net, mlp]
+  spike_models: [logistic, weighted_logistic, mlp]
+  regime_models: [multinomial_logistic, mlp]
+  uncertainty_models:
+    - gaussian_fixed_mean
+    - student_t_fixed_mean
+    - gaussian_full
+    - student_t_full
+  sector_models: [ridge, elastic_net, weighted_logistic, multinomial_logistic, mlp]
+  seeds: [11, 29, 47, 71, 101]
+  folds: [holdout, 1, 2, 3]
+  input_variants: [price_plus_text, text_only]
+  max_train_dates: null
+  max_validation_dates: null
+  max_test_dates: null
+  spike_threshold_modes: [ticker, pooled_standardized]
+  regime_definitions: [q50_q90, q33_q67]
+  sector_representations: [R0, R1, R6, R7, R10]
+
+models:
+  ridge_alphas: [0.1, 1.0, 10.0]
+  elastic_net_alpha: 0.001
+  elastic_net_l1_ratio: 0.5
+  logistic_c: 1.0
+  mlp_hidden_sizes: [64, 32]
+  learning_rate: 0.001
+  batch_size: 256
+  max_epochs: 100
+  quick_max_epochs: 20
+  patience: 10
+  min_delta: 0.0001
+  gradient_clip: 5.0
+  uncertainty_min_scale: 0.0001
+  student_t_df: 5.0
+
+progress:
+  enabled: true
+  refresh_seconds: 1.0
+  epoch_log_every: 5
+  history_file: outputs/logs/progress_history.csv
+  task_manifest_file: outputs/logs/task_manifest.json
+  state_file: outputs/checkpoints/progress_state.json
+
+decision:
+  minimum_relative_gain: 0.01
+  minimum_fold_win_rate: 0.60
+  minimum_seed_count: 5
+  require_representations: [R0, R2, R3, R4, R9, R10, R11]
+  prototype_representations: [R5, R6, R7, R8]
+
+outputs:
+  required_tables:
+    - original_target_summary.csv
+    - volatility_level_results_validation.csv
+    - volatility_level_results_test.csv
+    - volatility_spike_results_validation.csv
+    - volatility_spike_results_test.csv
+    - volatility_regime_results_validation.csv
+    - volatility_regime_results_test.csv
+    - volatility_uncertainty_results_validation.csv
+    - volatility_uncertainty_results_test.csv
+    - sector_target_results.csv
+    - ticker_level_results.csv
+    - news_level_results.csv
+    - placebo_results.csv
+    - robustness_results.csv
+    - comparison_with_residual_targets.csv
+    - final_original_target_decision.csv
+  required_figures:
+    - volatility_distribution.png
+    - volatility_by_ticker.png
+    - volatility_spike_rate.png
+    - volatility_regime_timeline.png
+    - sector_volatility_breadth.png
+    - sector_regime.png
+    - spike_pr_curve.png
+    - calibration_curve.png
+    - confusion_matrix.png
+    - pit_histogram.png
+    - prediction_interval_coverage.png
+    - price_vs_prototype.png
+    - true_vs_shuffled_news.png
+    - original_vs_residual.png
+    - progress_history.png

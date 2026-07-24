@@ -1,0 +1,1 @@
+-r ../fintexts_semiconductor_prototype/requirements.txt
