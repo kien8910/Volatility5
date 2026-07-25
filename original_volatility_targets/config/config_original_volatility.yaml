@@ -567,6 +567,87 @@ prototype_cross_attention:
   require_all_fold_mean_wins: true
   locked_test: false
 
+# Transformer V2: a frozen R6-Ridge centre forecast plus an OOF-trained
+# residual correction. Market tokens are Transformer queries; prototype tokens
+# are a separate key/value memory processed by decoder-style cross-attention.
+prototype_transformer_cross_attention:
+  experiment_version: transformer_residual_v2
+  output_directory: outputs/prototype_transformer_cross_attention
+  representation_variant_family: grid_k4_pca64_tau0p1
+  folds: [1, 2, 3]
+  seeds: [11, 29, 47, 71, 101]
+  targets: [volatility_level]
+  models:
+    - PRICE_RIDGE
+    - PRICE_META_RIDGE
+    - R6_RIDGE
+    - META_RESIDUAL_MLP
+    - R6_RESIDUAL_CONCAT_MLP
+    - R6_TRANSFORMER_XATTN
+    - R6_META_TRANSFORMER_XATTN
+    - R9_META_TRANSFORMER_XATTN
+    - R10_META_TRANSFORMER_XATTN
+    - R11_META_TRANSFORMER_XATTN
+  quick_models:
+    - R6_RIDGE
+    - META_RESIDUAL_MLP
+    - R6_RESIDUAL_CONCAT_MLP
+    - R6_META_TRANSFORMER_XATTN
+    - R10_META_TRANSFORMER_XATTN
+  primary_model: R6_META_TRANSFORMER_XATTN
+  fixed_comparators:
+    - PRICE_RIDGE
+    - PRICE_META_RIDGE
+    - R6_RIDGE
+    - META_RESIDUAL_MLP
+    - R6_RESIDUAL_CONCAT_MLP
+    - R6_TRANSFORMER_XATTN
+    - R9_META_TRANSFORMER_XATTN
+    - R10_META_TRANSFORMER_XATTN
+    - R11_META_TRANSFORMER_XATTN
+  prototype_source:
+    R6_TRANSFORMER_XATTN: R6
+    R6_META_TRANSFORMER_XATTN: R6
+    R9_META_TRANSFORMER_XATTN: R9
+    R10_META_TRANSFORMER_XATTN: R10
+    R11_META_TRANSFORMER_XATTN: R11
+  news_levels: [macro, sector, related, target]
+  metadata_suffixes:
+    - news_count
+    - canonical_event_count
+    - mean_event_lag_days
+    - max_event_lag_days
+    - no_news_mask
+    - days_since_last_news
+    - has_prior_news
+  ridge_alpha: 10.0
+  baseline_oof_splits: 5
+  baseline_oof_min_train_fraction: 0.40
+  d_model: 48
+  n_heads: 4
+  hidden_dim: 96
+  transformer_ff_dim: 128
+  market_encoder_layers: 1
+  cross_attention_layers: 2
+  dropout: 0.10
+  gate_initial_value: 0.05
+  qlike_loss_weight: 0.25
+  batch_size: 256
+  max_epochs: 80
+  quick_max_epochs: 20
+  inner_validation_fraction: 0.20
+  patience: 10
+  min_delta: 0.0001
+  learning_rate: 0.0005
+  weight_decay: 0.0001
+  gradient_clip: 5.0
+  epoch_log_every: 5
+  num_workers: 0
+  minimum_relative_gain: 0.005
+  minimum_cell_win_rate: 0.60
+  require_all_fold_mean_wins: true
+  locked_test: false
+
 models:
   ridge_alphas: [0.1, 1.0, 10.0]
   elastic_net_alpha: 0.001
