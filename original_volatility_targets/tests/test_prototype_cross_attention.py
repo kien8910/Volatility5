@@ -7,6 +7,7 @@ import torch
 from src.prototype_cross_attention import (
     PrototypeCrossAttention,
     _inner_chronological_indices,
+    _merge_fold_scoped_features,
     prototype_columns_by_level,
 )
 
@@ -113,3 +114,35 @@ def test_inner_early_stopping_split_is_chronological() -> None:
         < frame.iloc[validation_indices]["target_date"].min()
     )
     assert len(frame.iloc[validation_indices]["target_date"].unique()) == 8
+
+
+def test_fold_feature_join_ignores_dates_outside_fold_scope() -> None:
+    all_market = pd.DataFrame(
+        {
+            "ticker": ["AMD", "AMD", "AMD"],
+            "feature_date": pd.to_datetime(
+                ["2020-01-02", "2020-01-03", "2020-01-06"]
+            ),
+            "target_date": pd.to_datetime(
+                ["2020-01-03", "2020-01-06", "2020-01-07"]
+            ),
+            "__outer_fold_split": ["train", "validation", "outside"],
+        }
+    )
+    scoped_market = all_market.loc[
+        all_market["__outer_fold_split"].ne("outside")
+    ].copy()
+    keys = scoped_market[["ticker", "feature_date"]]
+    metadata = keys.assign(meta__target__news_count=[1.0, 0.0])
+    prototypes = keys.assign(
+        softproto__target__0000=[0.8, 0.0],
+        softproto__target__0001=[0.2, 0.0],
+    )
+    joined = _merge_fold_scoped_features(
+        scoped_market,
+        metadata,
+        prototypes,
+        "R6",
+    )
+    assert len(joined) == 2
+    assert joined["feature_date"].max() == pd.Timestamp("2020-01-03")

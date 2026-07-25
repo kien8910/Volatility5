@@ -439,6 +439,49 @@ def _target_arrays(
     )
 
 
+def _merge_fold_scoped_features(
+    scoped_market: pd.DataFrame,
+    metadata_features: pd.DataFrame,
+    prototype_features: pd.DataFrame,
+    prototype_source: str,
+) -> pd.DataFrame:
+    """Join features after the market has been restricted to one fold."""
+
+    joined = scoped_market.merge(
+        metadata_features,
+        on=["ticker", "feature_date"],
+        how="left",
+        validate="one_to_one",
+        indicator="__meta_join",
+    )
+    if joined["__meta_join"].ne("both").any():
+        examples = joined.loc[
+            joined["__meta_join"].ne("both"),
+            ["ticker", "feature_date", "target_date", "__outer_fold_split"],
+        ].head(10)
+        raise AssertionError(
+            "Some in-scope market rows lack pure metadata controls: "
+            f"{examples.to_dict(orient='records')}"
+        )
+    joined = joined.drop(columns="__meta_join").merge(
+        prototype_features,
+        on=["ticker", "feature_date"],
+        how="left",
+        validate="one_to_one",
+        indicator="__prototype_join",
+    )
+    if joined["__prototype_join"].ne("both").any():
+        examples = joined.loc[
+            joined["__prototype_join"].ne("both"),
+            ["ticker", "feature_date", "target_date", "__outer_fold_split"],
+        ].head(10)
+        raise AssertionError(
+            f"Some in-scope market rows lack fold-safe {prototype_source} "
+            f"prototype features: {examples.to_dict(orient='records')}"
+        )
+    return joined.drop(columns="__prototype_join")
+
+
 def prepare_arrays(
     config: Mapping[str, Any],
     profile: Mapping[str, Any],
@@ -467,6 +510,28 @@ def prepare_arrays(
     market["target_date"] = pd.to_datetime(
         market["target_date"], errors="raise"
     ).dt.normalize()
+    # Fold-specific representation artifacts intentionally contain only the
+    # train/validation scope used to fit and evaluate that fold. Restrict the
+    # market panel before joining; otherwise unrelated later dates are falsely
+    # reported as missing fold-safe features.
+    market_train, market_validation, market_test = task_split_frames(
+        market, config, profile, fold
+    )
+    if not market_test.empty:
+        raise AssertionError("A chronological validation fold exposed test rows.")
+    market_train = market_train.copy()
+    market_validation = market_validation.copy()
+    market_train["__outer_fold_split"] = "train"
+    market_validation["__outer_fold_split"] = "validation"
+    scoped_market = pd.concat(
+        [market_train, market_validation],
+        ignore_index=True,
+        sort=False,
+    )
+    if scoped_market.duplicated(["ticker", "feature_date"]).any():
+        raise AssertionError(
+            "Fold-scoped market data contains duplicate ticker/date rows."
+        )
     prototype_frame, prototype_path = _load_feature_frame(
         config, profile, source, fold, seed
     )
@@ -487,35 +552,23 @@ def prepare_arrays(
     metadata_keep = metadata_frame[
         ["ticker", "feature_date", *metadata_columns]
     ].copy()
-    joined = market.merge(
+    joined = _merge_fold_scoped_features(
+        scoped_market,
         metadata_keep,
-        on=["ticker", "feature_date"],
-        how="left",
-        validate="one_to_one",
-        indicator="__meta_join",
-    )
-    if joined["__meta_join"].ne("both").any():
-        raise AssertionError("Some market rows lack pure metadata controls.")
-    joined = joined.drop(columns="__meta_join").merge(
         prototype_keep,
-        on=["ticker", "feature_date"],
-        how="left",
-        validate="one_to_one",
-        indicator="__prototype_join",
+        source,
     )
-    if joined["__prototype_join"].ne("both").any():
-        raise AssertionError(
-            f"Some market rows lack fold-safe {source} prototype features."
-        )
-    joined = joined.drop(columns="__prototype_join")
-    train, validation, test = task_split_frames(
-        joined, config, profile, fold
-    )
-    if not test.empty:
-        raise AssertionError("A chronological validation fold exposed test rows.")
+    train = joined.loc[
+        joined["__outer_fold_split"].eq("train")
+    ].drop(columns="__outer_fold_split").copy()
+    validation = joined.loc[
+        joined["__outer_fold_split"].eq("validation")
+    ].drop(columns="__outer_fold_split").copy()
+    if train.empty or validation.empty:
+        raise AssertionError("Fold-scoped feature join produced an empty split.")
     if not train["target_date"].max() < validation["target_date"].min():
         raise AssertionError("Cross-attention train/validation chronology overlaps.")
-    price_columns = price_feature_columns(joined, config)
+    price_columns = price_feature_columns(scoped_market, config)
     price_train, price_validation, price_transform = _fit_numeric(
         train, validation, price_columns
     )
