@@ -49,6 +49,12 @@ def plan_tasks(
     tasks: list[TaskSpec] = []
     for variant in variants:
         representation = variant["representation"]
+        source_representation = str(
+            profile.get("representation_source_map", {}).get(
+                representation,
+                representation,
+            )
+        )
         input_variants = (
             ["price_only"]
             if representation == "R0"
@@ -73,7 +79,7 @@ def plan_tasks(
                         for seed in profile["seeds"]:
                             supported = fold_task_supported(
                                 config,
-                                representation,
+                                source_representation,
                                 variant["representation_variant_family"],
                                 fold,
                                 int(seed),
@@ -84,6 +90,7 @@ def plan_tasks(
                                 raise FileNotFoundError(
                                     "Missing fold-safe confirmatory artifact for "
                                     f"representation={representation}, "
+                                    f"source={source_representation}, "
                                     f"family={variant['representation_variant_family']}, "
                                     f"fold={fold}, seed={seed}. Run the residual "
                                     "r6-confirmatory artifact stage first."
@@ -105,6 +112,10 @@ def plan_tasks(
                                 payload["experiment_profile"] = str(
                                     profile["experiment_profile"]
                                 )
+                            if source_representation != representation:
+                                payload["representation_source"] = (
+                                    source_representation
+                                )
                             for key in (
                                 "text_news_levels",
                                 "training_cohort",
@@ -122,6 +133,14 @@ def plan_tasks(
                             if representation in prefix_map:
                                 payload["text_feature_prefixes"] = list(
                                     prefix_map[representation]
+                                )
+                            feature_name_map = profile.get(
+                                "representation_feature_names",
+                                {},
+                            )
+                            if representation in feature_name_map:
+                                payload["text_feature_names"] = list(
+                                    feature_name_map[representation]
                                 )
                             random_prefix = str(
                                 profile.get(

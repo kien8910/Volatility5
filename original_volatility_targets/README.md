@@ -235,6 +235,8 @@ Các lựa chọn hỗ trợ:
 --full
 --r6-confirmatory
 --target-news-only
+--target-mechanism-audit
+--target-component-audit
 --fold
 --seed
 --target
@@ -344,7 +346,8 @@ NO-GO
 Audit này chỉ dùng volatility level trên các ngày validation có target-company
 news. Nó kiểm tra riêng:
 
-- `R7` chỉ với các cột `meta__target__*`, không dùng embedding hay assignment;
+- `R7` dùng toàn bộ `meta__target__*`: metadata cơ bản cùng
+  entropy/novelty/distance phụ thuộc prototype, nhưng không dùng soft assignment;
 - `R6` semantic prototype đã khóa từ thí nghiệm target-news-only;
 - 30 representation `R9_NULL_<seed>` tạo từ assignment prototype ngẫu nhiên,
   độc lập cho từng fold và prototype seed;
@@ -369,6 +372,33 @@ Hoặc:
 ```bash
 python original_volatility_targets/run_original_volatility_pipeline.py --stage all --target-mechanism-audit --resume
 ```
+
+### Component ablation sau kết quả METADATA-ONLY
+
+Follow-up này tách khối `meta__target__*` thành hai phần không chồng lặp:
+
+- `META_BASIC`: news count, canonical count, event lag, no-news mask,
+  days-since-last-news và has-prior-news;
+- `PROTO_DIAG`: assignment entropy, novelty và nearest-prototype distance.
+
+Cả hai alias đọc cùng artifact R7 đã fit riêng trong từng fold. Không cần tạo
+lại embedding, PCA, K-means hoặc random prototypes. Chỉ có 30 task Ridge mới:
+2 component × 3 folds × 5 paired seeds.
+
+```bash
+python original_volatility_targets/run_original_volatility_pipeline.py --stage level --target-component-audit --resume
+python original_volatility_targets/run_original_volatility_pipeline.py --stage audit --target-component-audit --resume
+```
+
+Hoặc:
+
+```bash
+python original_volatility_targets/run_original_volatility_pipeline.py --stage all --target-component-audit --resume
+```
+
+Audit tái sử dụng R0/R6 từ `target_news_only`, R7 và 30 random seeds từ
+`target_mechanism_audit`. Kết quả có tiền tố `target_component_`; locked test
+vẫn đóng và quyết định mechanism trước đó không bị ghi đè.
 
 Các file kết quả có tiền tố `target_mechanism_`. Audit báo empirical percentile
 và one-sided p-value của gain R6 so với phân phối 30 random-prototype seeds.

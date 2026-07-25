@@ -421,10 +421,13 @@ def prepare_stock_data(
     )
     market["feature_date"] = pd.to_datetime(market["feature_date"]).dt.normalize()
     representation = str(task.config["representation"])
+    source_representation = str(
+        task.config.get("representation_source", representation)
+    )
     variant = str(task.config.get("representation_variant", "selected_default"))
     row = representation_row(
         config,
-        representation,
+        source_representation,
         variant,
         fold=task.config["fold"],
         seed=int(task.config["seed"]),
@@ -459,6 +462,21 @@ def prepare_stock_data(
             raise ValueError(
                 f"No text features with prefixes={list(prefixes)!r} found "
                 f"for {representation}/{variant}."
+            )
+    selected_names = task.config.get("text_feature_names")
+    if selected_names is not None and representation != "R0":
+        requested_names = tuple(dict.fromkeys(map(str, selected_names)))
+        missing_names = sorted(set(requested_names).difference(text_columns))
+        if missing_names:
+            raise ValueError(
+                f"Requested text features are absent for "
+                f"{representation}/{variant}: {missing_names}"
+            )
+        text_columns = list(requested_names)
+        if not text_columns:
+            raise ValueError(
+                f"No explicitly selected text features for "
+                f"{representation}/{variant}."
             )
     joined = market.merge(
         representation_frame.drop(columns=["split"], errors="ignore"),
@@ -535,7 +553,7 @@ def prepare_stock_data(
     )
     fold = str(task.config["fold"])
     fit_scope = str(row.get("fit_split", "train"))
-    train_dependent = _uses_fold_manifest(representation)
+    train_dependent = _uses_fold_manifest(source_representation)
     fold_safe = (
         fold == "holdout"
         or not train_dependent

@@ -14,6 +14,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src import (  # noqa: E402
     audit_r6_failure,
+    audit_target_news_components,
     audit_target_news_mechanism,
     evaluate_r6_confirmatory,
     evaluate_target_news_only,
@@ -94,6 +95,14 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Post-hoc validation-only mechanism audit: target-news metadata "
             "plus 30 independent random-prototype seeds."
+        ),
+    )
+    mode.add_argument(
+        "--target-component-audit",
+        action="store_true",
+        help=(
+            "Post-hoc target-news ablation separating pure metadata from "
+            "prototype-derived entropy, novelty and distance."
         ),
     )
     parser.add_argument(
@@ -230,6 +239,17 @@ def _evaluation_tasks(
 
 
 def _audit_tasks(mode: str) -> list[TaskSpec]:
+    if mode == "target_component_audit":
+        return [
+            TaskSpec(
+                stage="audit",
+                action="target_news_component_audit",
+                config={"experiment_profile": mode},
+                required=True,
+                weight=1.0,
+                outputs=audit_target_news_components.audit_outputs(),
+            ).with_id()
+        ]
     if mode == "target_mechanism_audit":
         return [
             TaskSpec(
@@ -243,8 +263,8 @@ def _audit_tasks(mode: str) -> list[TaskSpec]:
         ]
     if mode != "r6_confirmatory":
         raise ValueError(
-            "The audit stage is available only with --r6-confirmatory or "
-            "--target-mechanism-audit."
+            "The audit stage is available only with --r6-confirmatory, "
+            "--target-mechanism-audit or --target-component-audit."
         )
     return [
         TaskSpec(
@@ -381,6 +401,8 @@ def _execute(
             task.action, config, mode=mode
         )
     if task.stage == "audit":
+        if task.action == "target_news_component_audit":
+            return audit_target_news_components.run(config)
         if task.action == "target_news_mechanism_audit":
             return audit_target_news_mechanism.run(config)
         return audit_r6_failure.run(config)
@@ -584,6 +606,43 @@ def _print_completion_report(
 
 
 def _print_audit_report(config: Mapping[str, Any], mode: str) -> None:
+    if mode == "target_component_audit":
+        path = project_path(
+            config,
+            "outputs",
+            "tables",
+            "target_component_decision.csv",
+        )
+        if not path.is_file():
+            return
+        row = read_table(path).iloc[0]
+        print("\nTARGET-NEWS COMPONENT AUDIT (POST-HOC)")
+        print(
+            f"Grid: {int(row['fold_count'])} folds x "
+            f"{int(row['prototype_model_seed_count'])} paired seeds"
+        )
+        print(f"New training tasks: {int(row['new_training_task_count'])}")
+        print(
+            "Pure metadata signal passed: "
+            f"{bool(row['pure_metadata_signal_passed'])}"
+        )
+        print(
+            "Prototype diagnostics signal passed: "
+            f"{bool(row['prototype_diagnostics_signal_passed'])}"
+        )
+        print(
+            "Semantic beyond combined metadata passed: "
+            f"{bool(row['semantic_incremental_to_combined_passed'])}"
+        )
+        print(f"Component decision: {row['decision']}")
+        print(f"Reason: {row['reason']}")
+        print("Locked test used: False")
+        print(
+            "Prior mechanism decision remains: "
+            f"{row['prior_mechanism_decision_remains']}"
+        )
+        print(f"Next step: {row['next_step']}")
+        return
     if mode == "target_mechanism_audit":
         path = project_path(
             config,
@@ -645,7 +704,9 @@ def main() -> None:
     config = load_config(args.config)
     ensure_directories(config)
     mode = (
-        "target_mechanism_audit"
+        "target_component_audit"
+        if args.target_component_audit
+        else "target_mechanism_audit"
         if args.target_mechanism_audit
         else "target_news_only"
         if args.target_news_only
