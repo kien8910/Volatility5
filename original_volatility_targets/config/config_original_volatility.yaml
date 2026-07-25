@@ -490,6 +490,83 @@ structured_event_pilot:
     maximum_dropped_event_rate: 0.10
     log_every: 20
 
+# Cross-attention follow-up using only the existing daily embedding/prototype
+# panels. This experiment never reads structured-event or LLM extraction files.
+prototype_cross_attention:
+  output_directory: outputs/prototype_cross_attention
+  representation_variant_family: grid_k4_pca64_tau0p1
+  folds: [1, 2, 3]
+  seeds: [11, 29, 47, 71, 101]
+  targets: [volatility_level]
+  optional_targets: [spike_q90]
+  models:
+    - PRICE_RIDGE
+    - PRICE_META_RIDGE
+    - R6_RIDGE
+    - PRICE_MLP
+    - META_BASIC_MLP
+    - R6_META_CONCAT_MLP
+    - R6_XATTN
+    - R6_META_XATTN
+    - R9_META_XATTN
+    - R10_META_XATTN
+    - R11_META_XATTN
+  quick_models:
+    - PRICE_MLP
+    - META_BASIC_MLP
+    - R6_META_CONCAT_MLP
+    - R6_META_XATTN
+    - R10_META_XATTN
+  primary_model: R6_META_XATTN
+  fixed_comparators:
+    - PRICE_RIDGE
+    - PRICE_META_RIDGE
+    - R6_RIDGE
+    - PRICE_MLP
+    - META_BASIC_MLP
+    - R6_META_CONCAT_MLP
+    - R9_META_XATTN
+    - R10_META_XATTN
+    - R11_META_XATTN
+  prototype_source:
+    R6_XATTN: R6
+    R6_META_XATTN: R6
+    R9_META_XATTN: R9
+    R10_META_XATTN: R10
+    R11_META_XATTN: R11
+  news_levels: [macro, sector, related, target]
+  # Deliberately excludes entropy, novelty and centroid distance: those are
+  # prototype diagnostics rather than a pure news-arrival metadata control.
+  metadata_suffixes:
+    - news_count
+    - canonical_event_count
+    - mean_event_lag_days
+    - max_event_lag_days
+    - no_news_mask
+    - days_since_last_news
+    - has_prior_news
+  ridge_alpha: 10.0
+  spike_quantile: 0.90
+  d_model: 64
+  n_heads: 4
+  hidden_dim: 96
+  dropout: 0.15
+  batch_size: 256
+  max_epochs: 80
+  quick_max_epochs: 20
+  inner_validation_fraction: 0.20
+  patience: 10
+  min_delta: 0.0001
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  gradient_clip: 5.0
+  epoch_log_every: 5
+  num_workers: 0
+  minimum_relative_gain: 0.005
+  minimum_cell_win_rate: 0.60
+  require_all_fold_mean_wins: true
+  locked_test: false
+
 models:
   ridge_alphas: [0.1, 1.0, 10.0]
   elastic_net_alpha: 0.001
