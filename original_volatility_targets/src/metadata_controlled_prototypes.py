@@ -557,8 +557,12 @@ def _prepare_data(
     )
     if missing_metadata:
         raise ValueError(f"R7 metadata features are missing: {missing_metadata}")
+    metadata = metadata_frame[
+        ["ticker", "feature_date", *metadata_names]
+    ].copy()
+    metadata["__metadata_artifact_observed"] = True
     joined = market.merge(
-        metadata_frame[["ticker", "feature_date", *metadata_names]],
+        metadata,
         on=["ticker", "feature_date"],
         how="left",
         validate="one_to_one",
@@ -579,6 +583,7 @@ def _prepare_data(
     if not gate_columns:
         raise ValueError("R6 has no target prototype columns for the news gate.")
     gate = gate_frame[["ticker", "feature_date"]].copy()
+    gate["__gate_artifact_observed"] = True
     gate["has_target_news"] = (
         gate_frame[gate_columns]
         .replace([np.inf, -np.inf], np.nan)
@@ -594,12 +599,10 @@ def _prepare_data(
         how="left",
         validate="one_to_one",
     )
-    if joined["has_target_news"].isna().any():
-        raise AssertionError("Some market rows lack a fold-safe target-news gate.")
-    joined["has_target_news"] = joined["has_target_news"].astype(bool)
 
     semantic_columns: list[str] = []
     source_scope = "not_applicable"
+    source_required = representation != "R0" and source != "R7"
     if representation != "R0" and source != "R7":
         source_frame, source_scope = _load_fold_representation(
             config,
@@ -614,10 +617,12 @@ def _prepare_data(
             for index, column in enumerate(source_columns)
         }
         semantic_columns = list(rename.values())
+        semantic = source_frame[
+            ["ticker", "feature_date", *source_columns]
+        ].rename(columns=rename)
+        semantic["__semantic_artifact_observed"] = True
         joined = joined.merge(
-            source_frame[
-                ["ticker", "feature_date", *source_columns]
-            ].rename(columns=rename),
+            semantic,
             on=["ticker", "feature_date"],
             how="left",
             validate="one_to_one",
@@ -637,6 +642,42 @@ def _prepare_data(
         profile,
         fold,
     )
+    # Fold-safe representation artifacts intentionally omit market rows outside
+    # their train/validation interval.  Coverage must therefore be checked only
+    # after task_split_frames has selected the current fold.
+    coverage_markers = [
+        "__metadata_artifact_observed",
+        "__gate_artifact_observed",
+    ]
+    if source_required:
+        coverage_markers.append("__semantic_artifact_observed")
+    for split_name, split_frame in (
+        ("train", train_full),
+        ("validation", validation),
+        ("test", test),
+    ):
+        if split_frame.empty:
+            continue
+        missing_coverage: dict[str, int] = {}
+        for marker in coverage_markers:
+            if marker not in split_frame:
+                missing_coverage[marker] = int(len(split_frame))
+                continue
+            missing_count = int(split_frame[marker].isna().sum())
+            if missing_count:
+                missing_coverage[marker] = missing_count
+        if missing_coverage:
+            raise AssertionError(
+                f"Fold {fold} {split_name} rows lack fold-safe artifact "
+                f"coverage: {missing_coverage}"
+            )
+        if split_frame["has_target_news"].isna().any():
+            raise AssertionError(
+                f"Fold {fold} {split_name} has an invalid target-news gate."
+            )
+        split_frame["has_target_news"] = split_frame[
+            "has_target_news"
+        ].astype(bool)
     preparation: dict[str, Any] = {
         "metadata_fit_scope": metadata_scope,
         "gate_fit_scope": gate_scope,
