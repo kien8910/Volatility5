@@ -408,3 +408,61 @@ và one-sided p-value của gain R6 so với phân phối 30 random-prototype se
 Hiện implementation cố ý dùng `NO-GO` khi cổng đầy đủ không đạt; `WEAK-GO` chỉ
 nên được thêm sau một quy tắc định lượng được khóa trước cho subgroup, tránh
 diễn giải hậu nghiệm.
+
+## Metadata-controlled prototype experiment
+
+Thí nghiệm tiếp theo không thay `META_BASIC` bằng một mô hình phức tạp. Nó dùng
+`R0 + META_BASIC` làm đối chứng mạnh rồi kiểm tra phần semantic còn lại:
+
+```text
+R6 semantic features
+-> expanding-window nuisance model: META_BASIC + ticker + calendar
+-> semantic residuals
+-> optional interaction with the current price-volatility regime
+-> q90 volatility-spike classifier
+```
+
+Mọi nuisance model, scaler, regime threshold và classifier đều fit trong
+fold-train. Validation chỉ được transform; locked holdout không được đọc. Các
+representation chính:
+
+- `META_R6`: metadata cộng soft prototype chưa residualize;
+- `ORTHO_R6`: metadata cộng phần R6 không dự đoán được từ metadata;
+- `ORTHO_R6_REGIME`: `ORTHO_R6` cộng tương tác low/middle/high volatility;
+- `ORTHO_R3`, `ORTHO_R4`: PCA và random-projection đã residualize;
+- `ORTHO_R10`, `ORTHO_R11`, `ORTHO_P_LAGGED`, `ORTHO_P_PERMUTED`: placebo;
+- `ORTHO_R9_NULL_<seed>`: 30 random-prototype nulls.
+
+Trước hết phải có fold-safe R3/R4/R6/placebo artifacts và 30 random prototype
+seeds:
+
+```bash
+python fintexts_semiconductor_prototype/run_pipeline.py --stage r6-confirmatory --config fintexts_semiconductor_prototype/config/config_r6_confirmatory.yaml
+python fintexts_semiconductor_prototype/run_pipeline.py --stage target-mechanism-artifacts --config fintexts_semiconductor_prototype/config/config_r6_confirmatory.yaml
+```
+
+Chạy toàn bộ 591 training tasks và đánh giá:
+
+```bash
+python original_volatility_targets/run_original_volatility_pipeline.py --stage spike --metadata-controlled-prototypes --resume
+python original_volatility_targets/run_original_volatility_pipeline.py --stage evaluate --metadata-controlled-prototypes --resume
+```
+
+Hoặc:
+
+```bash
+python original_volatility_targets/run_original_volatility_pipeline.py --stage all --metadata-controlled-prototypes --resume
+```
+
+Có thể smoke-run từng representation trước (chưa chạy `evaluate` vì grid chưa đủ):
+
+```bash
+python original_volatility_targets/run_original_volatility_pipeline.py --stage spike --metadata-controlled-prototypes --representation R0 --resume
+python original_volatility_targets/run_original_volatility_pipeline.py --stage spike --metadata-controlled-prototypes --representation META_BASIC --resume
+python original_volatility_targets/run_original_volatility_pipeline.py --stage spike --metadata-controlled-prototypes --representation ORTHO_R6 --resume
+python original_volatility_targets/run_original_volatility_pipeline.py --stage spike --metadata-controlled-prototypes --representation ORTHO_R6_REGIME --resume
+```
+
+Kết quả có tiền tố `metadata_controlled_`. Quyết định chỉ dùng target-news
+validation days và gom kết quả theo fold trước khi xét độ ổn định, vì năm model
+seed của baseline metadata không phải năm quan sát thống kê độc lập.

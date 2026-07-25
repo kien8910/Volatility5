@@ -19,6 +19,7 @@ from src import (  # noqa: E402
     evaluate_r6_confirmatory,
     evaluate_target_news_only,
     evaluate_original_targets,
+    metadata_controlled_prototypes,
     prepare_targets,
     train_sector_targets,
     train_volatility_level,
@@ -105,6 +106,15 @@ def parse_args() -> argparse.Namespace:
             "prototype-derived entropy, novelty and distance."
         ),
     )
+    mode.add_argument(
+        "--metadata-controlled-prototypes",
+        action="store_true",
+        help=(
+            "Exploratory q90-spike experiment: control target-news metadata, "
+            "cross-fit semantic residuals, add price-regime interactions and "
+            "compare against PCA, random projection and locked placebos."
+        ),
+    )
     parser.add_argument(
         "--resume",
         action="store_true",
@@ -183,6 +193,17 @@ def _prepare_tasks() -> list[TaskSpec]:
 def _evaluation_tasks(
     config: Mapping[str, Any], mode: str
 ) -> list[TaskSpec]:
+    if mode == "metadata_controlled_prototypes":
+        return [
+            TaskSpec(
+                stage="evaluate",
+                action="metadata_controlled_prototypes",
+                config={"experiment_profile": mode},
+                required=True,
+                weight=1.0,
+                outputs=metadata_controlled_prototypes.evaluation_outputs(),
+            ).with_id()
+        ]
     if mode == "r6_confirmatory":
         return [
             TaskSpec(
@@ -306,9 +327,18 @@ def plan_all_tasks(
             train_volatility_level.plan_tasks(config, profile, quick=quick)
         )
     if "spike" in requested:
-        tasks.extend(
-            train_volatility_spike.plan_tasks(config, profile, quick=quick)
-        )
+        if mode == "metadata_controlled_prototypes":
+            tasks.extend(
+                metadata_controlled_prototypes.plan_tasks(
+                    config,
+                    profile,
+                    quick=quick,
+                )
+            )
+        else:
+            tasks.extend(
+                train_volatility_spike.plan_tasks(config, profile, quick=quick)
+            )
     if "regime" in requested:
         tasks.extend(
             train_volatility_regime.plan_tasks(config, profile, quick=quick)
@@ -393,6 +423,8 @@ def _execute(
     if task.stage == "prepare":
         return prepare_targets.run_action(task.action, config)
     if task.stage == "evaluate":
+        if task.action == "metadata_controlled_prototypes":
+            return metadata_controlled_prototypes.run_evaluation(config)
         if task.action == "r6_confirmatory":
             return evaluate_r6_confirmatory.run(config)
         if task.action == "target_news_only":
@@ -406,6 +438,16 @@ def _execute(
         if task.action == "target_news_mechanism_audit":
             return audit_target_news_mechanism.run(config)
         return audit_r6_failure.run(config)
+    if (
+        task.stage == "spike"
+        and task.action == "train_metadata_controlled_spike"
+    ):
+        return metadata_controlled_prototypes.run_task(
+            task,
+            config,
+            profile,
+            tracker,
+        )
     return _runner_for_task(task)(task, config, profile, tracker)
 
 
@@ -439,6 +481,9 @@ def _print_completion_report(
     summary: Mapping[str, Any],
     mode: str,
 ) -> None:
+    if mode == "metadata_controlled_prototypes":
+        metadata_controlled_prototypes.print_report(config, summary)
+        return
     if mode == "target_news_only":
         decision_path = project_path(
             config,
@@ -704,7 +749,9 @@ def main() -> None:
     config = load_config(args.config)
     ensure_directories(config)
     mode = (
-        "target_component_audit"
+        "metadata_controlled_prototypes"
+        if args.metadata_controlled_prototypes
+        else "target_component_audit"
         if args.target_component_audit
         else "target_mechanism_audit"
         if args.target_mechanism_audit
