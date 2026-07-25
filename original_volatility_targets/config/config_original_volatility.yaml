@@ -395,6 +395,101 @@ metadata_controlled_prototypes:
   maximum_empirical_p_value: 0.05
   minimum_random_fold_win_rate: 0.80
 
+# Fast development-only screen for LLM-extracted structured target-news events.
+# The last 504 development trading dates are divided into two expanding folds:
+# 378 train -> 63 validation, then 441 train -> 63 validation. The 2023
+# locked test is checked only as a boundary and is never evaluated.
+structured_event_pilot:
+  output_directory: outputs/structured_event_pilot
+  news_levels: [target]
+  initial_train_dates: 378
+  validation_block_dates: 63
+  fold_count: 2
+  spike_quantile: 0.90
+  lookbacks: [1, 3, 5]
+  decay_rate: 0.50
+  minimum_feature_count: 10
+  inner_validation_fraction: 0.20
+  logistic_c_values: [0.1, 1.0]
+  model_seed: 20260725
+  placebo_seeds: [1001, 1002, 1003]
+  audit_sample_size: 200
+  # Rough pre-run estimate only. Measured throughput drives the live ETA.
+  planning_events_per_minute: 8.0
+  minimum_absolute_pr_auc_gain: 0.01
+  minimum_relative_pr_auc_gain_percent: 5.0
+  maximum_brier_degradation_percent: 1.0
+  # Deterministic pre-LLM gate. Its count/mask are included in F1_META, so the
+  # structured representations must add signal beyond keyword-gated arrival.
+  candidate_filter:
+    enabled: true
+    patterns:
+      - '\bearnings?\b'
+      - '\bguidance\b'
+      - '\bforecast\b'
+      - '\boutlook\b'
+      - '\bupgrades?\b'
+      - '\bdowngrades?\b'
+      - '\bprice target\b'
+      - '\bexport (?:ban|restriction|control)s?\b'
+      - '\bsanctions?\b'
+      - '\bshortages?\b'
+      - '\bsupply constraint'
+      - '\bmergers?\b'
+      - '\bacquisitions?\b'
+      - '\bacquires?\b'
+      - '\bacquired\b'
+      - '\blawsuits?\b'
+      - '\blitigation\b'
+      - '\bantitrust\b'
+      - '\bchief executive\b'
+      - '\bCEO\b'
+      - '\brevenue (?:rose|fell|grew|declined|beat|missed)\b'
+      - '\bprofit (?:rose|fell|grew|declined|beat|missed)\b'
+  event_types:
+    - earnings_result
+    - earnings_guidance
+    - analyst_rating
+    - product_launch
+    - ai_demand
+    - memory_price
+    - export_restriction
+    - fab_capex
+    - supply_shortage
+    - customer_supplier
+    - competition
+    - merger_acquisition
+    - litigation_regulation
+    - macro_rate
+    - management_change
+    - other
+  directions: [positive, negative, mixed, neutral, unknown]
+  magnitudes: [small, moderate, large, unknown]
+  certainties: [confirmed, expected, rumored, conditional, unknown]
+  time_horizons: [immediate, next_quarter, next_year, long_term, unknown]
+  entity_roles:
+    - target_company
+    - competitor
+    - supplier
+    - customer
+    - regulator
+    - semiconductor_sector
+    - macro_entity
+    - other
+  extractor:
+    model_id: Qwen/Qwen3-8B
+    revision: null
+    prompt_version: semiconductor_minimal_v1
+    trust_remote_code: false
+    load_in_4bit: true
+    batch_size: 2
+    max_input_tokens: 3072
+    max_new_tokens: 768
+    max_events_per_news: 3
+    minimum_valid_rate: 0.95
+    maximum_dropped_event_rate: 0.10
+    log_every: 20
+
 models:
   ridge_alphas: [0.1, 1.0, 10.0]
   elastic_net_alpha: 0.001

@@ -277,6 +277,100 @@ Task model độc lập có thể thất bại và các task khác vẫn tiếp 
 cấu hình được lưu đầy đủ. Lỗi ở prepare/evaluate là lỗi toàn vẹn nên pipeline
 dừng. Cuối lượt chạy, log báo số completed, failed, skipped và danh sách lỗi.
 
+## Structured-event forecasting feasibility pilot
+
+Pilot này kiểm tra nhanh liệu event có cấu trúc do một LLM đóng băng rút trích từ
+target-company news có cải thiện dự báo `volatility_spike_q90` ngoài price và
+`META_BASIC` hay không. Pilot chỉ dùng 504 ngày development gần nhất:
+
+```text
+Fold 1: 378 ngày train -> 63 ngày validation
+Fold 2: 441 ngày train -> 63 ngày validation
+```
+
+Locked test 2023 chỉ được đọc ngày bắt đầu để assertion không chồng lấn; target và
+metric test không được đánh giá. Representation được so sánh cố định:
+
+```text
+F0_PRICE
+F1_META_BASIC
+F1_EVENT_META
+F2_EVENT_TYPE
+F3_SLOTS
+F4_INTERACTIONS
+```
+
+Placebo gồm shuffled event type, shuffled date và random structured vector.
+Để rút ngắn inference, một keyword gate cố định chỉ gửi các tin có khả năng chứa
+sự kiện tài chính quan trọng tới LLM. `F1_META_BASIC` chứa cả count/mask của gate này,
+`F1_EVENT_META` bổ sung số structured events nhưng chưa dùng event type/slots.
+Representation structured chỉ PASS nếu tốt hơn cả hai baseline, nên không thể
+thắng chỉ vì keyword gate hoặc vì LLM phát hiện ngày có event.
+
+Trên server GPU, cài requirements rồi xem trước số tin và cửa sổ thời gian:
+
+```bash
+python original_volatility_targets/run_structured_event_pilot.py --stage plan
+```
+
+Chạy lần lượt:
+
+```bash
+python original_volatility_targets/run_structured_event_pilot.py --stage extract --resume
+python original_volatility_targets/run_structured_event_pilot.py --stage features
+python original_volatility_targets/run_structured_event_pilot.py --stage forecast --resume
+python original_volatility_targets/run_structured_event_pilot.py --stage evaluate
+```
+
+Hoặc chạy end-to-end:
+
+```bash
+python original_volatility_targets/run_structured_event_pilot.py --stage all --resume
+```
+
+Extractor mặc định là `Qwen/Qwen3-8B`, non-thinking, deterministic decoding và
+bitsandbytes 4-bit. Có thể đổi model/batch mà không sửa code:
+
+```bash
+python original_volatility_targets/run_structured_event_pilot.py \
+  --stage extract --resume \
+  --extractor-model Qwen/Qwen3-8B \
+  --batch-size 2
+```
+
+Không dùng `--force` khi chỉ muốn tiếp tục lượt chạy bị ngắt. Cache được ghi sau mỗi
+batch, còn mỗi forecast task có checkpoint và prediction riêng.
+
+Tiến trình và ETA được hiển thị trực tiếp bằng progress bar. Có thể theo dõi từ
+terminal khác:
+
+```bash
+tail -f original_volatility_targets/outputs/structured_event_pilot/logs/structured_event_pilot.log
+watch -n 5 cat original_volatility_targets/outputs/structured_event_pilot/logs/progress_state.json
+```
+
+Các output chính:
+
+```text
+outputs/structured_event_pilot/
+├── cache/structured_event_extraction.jsonl
+├── data/pilot_plan.json
+├── data/pilot_event_manifest.parquet
+├── data/structured_events.parquet
+├── data/structured_event_feature_panel.parquet
+├── tables/extraction_summary.csv
+├── tables/structured_event_audit_sample.csv
+├── tables/structured_event_pilot_results.csv
+├── tables/structured_event_pilot_ticker_results.csv
+├── tables/structured_event_pilot_placebos.csv
+├── tables/structured_event_pilot_comparisons.csv
+├── tables/structured_event_pilot_decision.csv
+└── tables/structured_event_pilot_report.json
+```
+
+`PILOT-PASS` chỉ cho phép mở rộng extraction trên development data. Nó không phải
+kết luận GO và không tự động mở locked test.
+
 ## Leakage contract
 
 - Dữ liệu feature/news ngày `t` dự báo target đúng trading day `t+1`.
