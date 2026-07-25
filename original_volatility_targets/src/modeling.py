@@ -73,6 +73,13 @@ _NEWS_GATE_CACHE: dict[
 ] = {}
 
 
+def _uses_fold_manifest(representation: str) -> bool:
+    return (
+        representation in FOLD_MANIFEST_REPRESENTATIONS
+        or representation.startswith("R9_NULL_")
+    )
+
+
 def experiment_task(
     stage: str,
     action: str,
@@ -120,7 +127,7 @@ def representation_row(
 ) -> pd.Series:
     if (
         str(fold) != "holdout"
-        and representation in FOLD_MANIFEST_REPRESENTATIONS
+        and _uses_fold_manifest(representation)
     ):
         path = resolve_shared_file(
             config,
@@ -212,7 +219,7 @@ def fold_task_supported(
 
     if str(fold) == "holdout" or representation in {"R0", "R1", "R2"}:
         return True
-    if representation not in FOLD_MANIFEST_REPRESENTATIONS:
+    if not _uses_fold_manifest(representation):
         return False
     try:
         representation_row(
@@ -440,6 +447,19 @@ def prepare_stock_data(
                 f"No {list(selected_news_levels)!r} text features found for "
                 f"{representation}/{variant}."
             )
+    selected_prefixes = task.config.get("text_feature_prefixes")
+    if selected_prefixes is not None and representation != "R0":
+        prefixes = tuple(map(str, selected_prefixes))
+        text_columns = [
+            column
+            for column in text_columns
+            if str(column).startswith(prefixes)
+        ]
+        if not text_columns:
+            raise ValueError(
+                f"No text features with prefixes={list(prefixes)!r} found "
+                f"for {representation}/{variant}."
+            )
     joined = market.merge(
         representation_frame.drop(columns=["split"], errors="ignore"),
         on=["ticker", "feature_date"],
@@ -515,7 +535,7 @@ def prepare_stock_data(
     )
     fold = str(task.config["fold"])
     fit_scope = str(row.get("fit_split", "train"))
-    train_dependent = representation in FOLD_MANIFEST_REPRESENTATIONS
+    train_dependent = _uses_fold_manifest(representation)
     fold_safe = (
         fold == "holdout"
         or not train_dependent

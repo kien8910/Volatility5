@@ -147,6 +147,69 @@ target_news_only:
   minimum_primary_samples_per_fold: 20
   comparison_representations: [R0, R3, R4, R9, R10, R11, P_LAGGED, P_PERMUTED]
 
+target_mechanism_audit:
+  experiment_profile: target_mechanism_audit
+  enabled_stages: [level, audit]
+  representations: [R7]
+  metadata_representation: R7
+  representation_feature_prefixes:
+    R7: [meta__]
+  representation_variant_family: grid_k4_pca64_tau0p1
+  random_representation_prefix: R9_NULL
+  minimum_random_prototype_seeds: 30
+  random_prototype_seeds:
+    - 1001
+    - 1002
+    - 1003
+    - 1004
+    - 1005
+    - 1006
+    - 1007
+    - 1008
+    - 1009
+    - 1010
+    - 1011
+    - 1012
+    - 1013
+    - 1014
+    - 1015
+    - 1016
+    - 1017
+    - 1018
+    - 1019
+    - 1020
+    - 1021
+    - 1022
+    - 1023
+    - 1024
+    - 1025
+    - 1026
+    - 1027
+    - 1028
+    - 1029
+    - 1030
+  level_models: [ridge]
+  ridge_alphas: [10.0]
+  seeds: [11, 29, 47, 71, 101]
+  folds: [1, 2, 3]
+  input_variants: [price_plus_text]
+  max_train_dates: null
+  max_validation_dates: null
+  max_test_dates: null
+  text_news_levels: [target]
+  training_cohort: all_days
+  evaluation_news_level: target
+  evaluation_gate_representation: R6
+  primary_evaluation_cohort: target_news_days
+  required_pooling: mean
+  news_presence_epsilon: 1.0e-10
+  minimum_primary_samples_per_fold: 20
+  base_experiment_profile: target_news_only
+  semantic_representation: R6
+  price_representation: R0
+  minimum_semantic_percentile: 0.95
+  maximum_empirical_p_value: 0.05
+
 models:
   ridge_alphas: [0.1, 1.0, 10.0]
   elastic_net_alpha: 0.001

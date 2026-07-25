@@ -339,6 +339,42 @@ WEAK-GO
 NO-GO
 ```
 
+## Audit cơ chế target-news
+
+Audit này chỉ dùng volatility level trên các ngày validation có target-company
+news. Nó kiểm tra riêng:
+
+- `R7` chỉ với các cột `meta__target__*`, không dùng embedding hay assignment;
+- `R6` semantic prototype đã khóa từ thí nghiệm target-news-only;
+- 30 representation `R9_NULL_<seed>` tạo từ assignment prototype ngẫu nhiên,
+  độc lập cho từng fold và prototype seed;
+- `R0` price-only làm mốc chung.
+
+Trước tiên tạo artifact ở project residual:
+
+```bash
+python fintexts_semiconductor_prototype/run_pipeline.py --stage target-mechanism-artifacts --config fintexts_semiconductor_prototype/config/config_r6_confirmatory.yaml
+```
+
+Sau đó train 465 task Ridge (31 representation × 3 fold × 5 paired seeds) và
+chạy audit:
+
+```bash
+python original_volatility_targets/run_original_volatility_pipeline.py --stage level --target-mechanism-audit --resume
+python original_volatility_targets/run_original_volatility_pipeline.py --stage audit --target-mechanism-audit --resume
+```
+
+Hoặc:
+
+```bash
+python original_volatility_targets/run_original_volatility_pipeline.py --stage all --target-mechanism-audit --resume
+```
+
+Các file kết quả có tiền tố `target_mechanism_`. Audit báo empirical percentile
+và one-sided p-value của gain R6 so với phân phối 30 random-prototype seeds.
+Đây là phân tích hậu nghiệm trên validation: không đọc locked test và không tự
+động thay đổi `TARGET-NEWS-ONLY-FAIL`.
+
 Hiện implementation cố ý dùng `NO-GO` khi cổng đầy đủ không đạt; `WEAK-GO` chỉ
 nên được thêm sau một quy tắc định lượng được khóa trước cho subgroup, tránh
 diễn giải hậu nghiệm.

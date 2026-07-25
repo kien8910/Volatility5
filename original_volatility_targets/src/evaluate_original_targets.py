@@ -63,6 +63,8 @@ METADATA_COLUMNS = (
     "evaluation_gate_representation",
     "primary_evaluation_cohort",
     "required_pooling",
+    "text_feature_prefixes",
+    "random_prototype_seed",
 )
 
 

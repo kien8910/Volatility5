@@ -338,6 +338,21 @@ GO-DIRECT, GO-MAGNITUDE, GO-SPIKE, GO-UNCERTAINTY,
 GO-REGIME, WEAK-GO, NO-GO
 ```
 
+## Artifact cho audit cơ chế target-news
+
+Sau khi artifact `r6-confirmatory` đã tồn tại, có thể tạo thêm R7 fold-safe và
+30 random-prototype null seeds mà không fit lại encoder, PCA hoặc K-means:
+
+```bash
+python run_pipeline.py --stage target-mechanism-artifacts --config config/config_r6_confirmatory.yaml
+```
+
+Stage này tái sử dụng đúng 3 chronological folds × 5 prototype seeds đã khóa,
+tạo `R7` và `R9_NULL_1001` đến `R9_NULL_1030`, rồi cập nhật
+`fold_representation_manifest.csv`. Bảng
+`target_mechanism_artifact_summary.csv` xác nhận đủ 465 artifact và tất cả đều
+có `fit_scope=fold_train_only`.
+
 Quyết định GO yêu cầu gain validation và test đúng chiều, tốt hơn price-only,
 raw/PCA/random projection, tốt hơn placebo shuffled/random, và đủ ổn định qua
 seed/fold. Kết quả chỉ ở một ticker, một level hay một regime được hạ xuống

@@ -25,9 +25,24 @@ def plan_tasks(
     *,
     quick: bool,
 ) -> list[TaskSpec]:
+    representations = list(map(str, profile["representations"]))
+    random_seeds = tuple(
+        dict.fromkeys(
+            int(value)
+            for value in profile.get("random_prototype_seeds", [])
+        )
+    )
+    if random_seeds:
+        random_prefix = str(
+            profile.get("random_representation_prefix", "R9_NULL")
+        )
+        representations.extend(
+            f"{random_prefix}_{seed}" for seed in random_seeds
+        )
+    representations = list(dict.fromkeys(representations))
     variants = plan_representation_variants(
         config,
-        profile["representations"],
+        representations,
         quick=quick,
         fixed_family=profile.get("representation_variant_family"),
     )
@@ -100,6 +115,25 @@ def plan_tasks(
                             ):
                                 if key in profile:
                                     payload[key] = profile[key]
+                            prefix_map = profile.get(
+                                "representation_feature_prefixes",
+                                {},
+                            )
+                            if representation in prefix_map:
+                                payload["text_feature_prefixes"] = list(
+                                    prefix_map[representation]
+                                )
+                            random_prefix = str(
+                                profile.get(
+                                    "random_representation_prefix",
+                                    "R9_NULL",
+                                )
+                            )
+                            random_token = f"{random_prefix}_"
+                            if representation.startswith(random_token):
+                                payload["random_prototype_seed"] = int(
+                                    representation.removeprefix(random_token)
+                                )
                             tasks.append(
                                 experiment_task("level", "train_level", payload)
                             )

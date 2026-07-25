@@ -14,6 +14,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src import (  # noqa: E402
     audit_r6_failure,
+    audit_target_news_mechanism,
     evaluate_r6_confirmatory,
     evaluate_target_news_only,
     evaluate_original_targets,
@@ -85,6 +86,14 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Locked volatility-level follow-up using only target-company "
             "text features and true target-news validation days."
+        ),
+    )
+    mode.add_argument(
+        "--target-mechanism-audit",
+        action="store_true",
+        help=(
+            "Post-hoc validation-only mechanism audit: target-news metadata "
+            "plus 30 independent random-prototype seeds."
         ),
     )
     parser.add_argument(
@@ -221,9 +230,21 @@ def _evaluation_tasks(
 
 
 def _audit_tasks(mode: str) -> list[TaskSpec]:
+    if mode == "target_mechanism_audit":
+        return [
+            TaskSpec(
+                stage="audit",
+                action="target_news_mechanism_audit",
+                config={"experiment_profile": mode},
+                required=True,
+                weight=1.0,
+                outputs=audit_target_news_mechanism.audit_outputs(),
+            ).with_id()
+        ]
     if mode != "r6_confirmatory":
         raise ValueError(
-            "The audit stage is available only with --r6-confirmatory."
+            "The audit stage is available only with --r6-confirmatory or "
+            "--target-mechanism-audit."
         )
     return [
         TaskSpec(
@@ -360,6 +381,8 @@ def _execute(
             task.action, config, mode=mode
         )
     if task.stage == "audit":
+        if task.action == "target_news_mechanism_audit":
+            return audit_target_news_mechanism.run(config)
         return audit_r6_failure.run(config)
     return _runner_for_task(task)(task, config, profile, tracker)
 
@@ -560,7 +583,41 @@ def _print_completion_report(
     print(f"Final decision: {row.get('decision', 'NO-GO')}")
 
 
-def _print_audit_report(config: Mapping[str, Any]) -> None:
+def _print_audit_report(config: Mapping[str, Any], mode: str) -> None:
+    if mode == "target_mechanism_audit":
+        path = project_path(
+            config,
+            "outputs",
+            "tables",
+            "target_mechanism_decision.csv",
+        )
+        if not path.is_file():
+            return
+        row = read_table(path).iloc[0]
+        print("\nTARGET-NEWS MECHANISM AUDIT (POST-HOC)")
+        print(
+            f"Grid: {int(row['fold_count'])} folds x "
+            f"{int(row['prototype_model_seed_count'])} paired seeds x "
+            f"{int(row['random_prototype_seed_count'])} random null seeds"
+        )
+        print(f"Metadata signal passed: {bool(row['metadata_signal_passed'])}")
+        print(
+            "Semantic beyond metadata passed: "
+            f"{bool(row['semantic_beyond_metadata_passed'])}"
+        )
+        print(
+            "Semantic beyond random prototypes passed: "
+            f"{bool(row['semantic_beyond_random_passed'])}"
+        )
+        print(f"Mechanism decision: {row['decision']}")
+        print(f"Reason: {row['reason']}")
+        print("Locked test used: False")
+        print(
+            "Confirmatory decision remains: "
+            f"{row['confirmatory_decision_remains']}"
+        )
+        print(f"Next step: {row['next_step']}")
+        return
     path = project_path(
         config,
         "outputs",
@@ -588,7 +645,9 @@ def main() -> None:
     config = load_config(args.config)
     ensure_directories(config)
     mode = (
-        "target_news_only"
+        "target_mechanism_audit"
+        if args.target_mechanism_audit
+        else "target_news_only"
         if args.target_news_only
         else "r6_confirmatory"
         if args.r6_confirmatory
@@ -665,7 +724,7 @@ def main() -> None:
             if any(task.stage == "evaluate" for task in tasks):
                 _print_completion_report(config, summary, mode)
             if any(task.stage == "audit" for task in tasks):
-                _print_audit_report(config)
+                _print_audit_report(config, mode)
     finally:
         tracker.close()
     if integrity_failure is not None:

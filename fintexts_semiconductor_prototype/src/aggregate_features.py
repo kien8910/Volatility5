@@ -1150,6 +1150,8 @@ def aggregate_fold_features(
     prototype_seed: int | None = None,
     pooling: str | None = None,
     representations: Sequence[str] | None = None,
+    random_placebo_seeds: Sequence[int] | None = None,
+    random_representation_prefix: str = "R9_NULL",
 ) -> dict[str, Path]:
     """Materialize fold-safe representations from one fold-train codebook.
 
@@ -1451,6 +1453,61 @@ def aggregate_fold_features(
         )
         for representation in requested
     }
+    random_seed_by_representation: dict[str, int] = {}
+    locked_random_seeds = tuple(
+        dict.fromkeys(int(value) for value in (random_placebo_seeds or ()))
+    )
+    if any(value < 0 for value in locked_random_seeds):
+        raise ValueError("Random-prototype placebo seeds must be non-negative.")
+    if locked_random_seeds:
+        instances = _instances(
+            fold_market,
+            edges,
+            selected_pooling,
+            half_life,
+            max_lag,
+        )
+        for random_index, random_seed in enumerate(
+            locked_random_seeds,
+            start=1,
+        ):
+            LOGGER.info(
+                "Fold mechanism null | fold=%d | prototype_seed=%d | "
+                "random_seed=%d | %d/%d",
+                int(fold_id),
+                seed,
+                random_seed,
+                random_index,
+                len(locked_random_seeds),
+            )
+            representation = (
+                f"{str(random_representation_prefix)}_{random_seed}"
+            )
+            if representation in outputs:
+                raise ValueError(
+                    f"Duplicate random-prototype representation: {representation}"
+                )
+            random_matrices = _random_prototype_placebo(
+                candidate_events,
+                hard,
+                random_seed,
+            )
+            random_blocks = [
+                _aggregate_matrix(
+                    instances,
+                    random_matrices[level],
+                    level,
+                    len(fold_market),
+                    selected_pooling,
+                    "randomproto",
+                )
+                for level in NEWS_LEVELS
+            ]
+            outputs[representation] = _join_feature_blocks(
+                fold_market,
+                random_blocks,
+            )
+            random_seed_by_representation[representation] = random_seed
     output_dir = project_path(
         config,
         (
@@ -1462,11 +1519,18 @@ def aggregate_fold_features(
     paths: dict[str, Path] = {}
     manifest_rows: list[dict[str, Any]] = []
     for representation, frame in outputs.items():
+        random_seed = random_seed_by_representation.get(representation)
+        random_token = (
+            ""
+            if random_seed is None
+            else f"_random{int(random_seed)}"
+        )
         destination = (
             output_dir
             / (
                 f"features_{representation}_{selected_pooling}__"
-                f"{representation_variant_family}_seed{seed}.parquet"
+                f"{representation_variant_family}_seed{seed}"
+                f"{random_token}.parquet"
             )
         )
         write_table(frame, destination)
@@ -1477,9 +1541,13 @@ def aggregate_fold_features(
                 "representation": representation,
                 "representation_variant": (
                     f"{representation_variant_family}_seed{seed}"
+                    f"{random_token}"
                 ),
                 "representation_variant_family": representation_variant_family,
                 "prototype_seed": seed,
+                "random_prototype_seed": (
+                    "" if random_seed is None else int(random_seed)
+                ),
                 "model_seed": "",
                 "pooling": selected_pooling,
                 "path": str(destination),
@@ -1492,14 +1560,22 @@ def aggregate_fold_features(
                 "events_variant": events_variant,
                 "selected": False,
                 "placebo": representation
-                in {"R9", "R10", "R11", "P_LAGGED", "P_PERMUTED"},
+                in {"R9", "R10", "R11", "P_LAGGED", "P_PERMUTED"}
+                or random_seed is not None,
                 "placebo_kind": {
                     "R9": "random_prototype_fold_train_distribution",
                     "R10": "within_fold_split_shuffled_date",
                     "R11": "fold_seed_deranged_ticker",
                     "P_LAGGED": "lagged_fold_r6",
                     "P_PERMUTED": "within_fold_split_permuted_r6",
-                }.get(representation, ""),
+                }.get(
+                    representation,
+                    (
+                        "random_prototype_mechanism_null"
+                        if random_seed is not None
+                        else ""
+                    ),
+                ),
             }
         )
     manifest_path = project_path(
