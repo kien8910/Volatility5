@@ -7,7 +7,7 @@ import pandas as pd
 from statsmodels.tsa.stattools import acf
 
 from .config import ExperimentConfig
-from .block_bootstrap import moving_block_indices
+from .block_bootstrap import moving_block_index_matrix
 from .utils import progress
 
 
@@ -178,14 +178,13 @@ def ranking_portfolio_summary(
         values = group["realized_spread"].to_numpy(dtype=float)
         for block_length in config.bootstrap_block_lengths:
             rng = np.random.default_rng(int(seed) + 7919 * block_length)
-            draws = np.asarray(
-                [
-                    values[
-                        moving_block_indices(len(values), block_length, rng)
-                    ].mean()
-                    for _ in range(config.bootstrap_repetitions)
-                ]
+            indices = moving_block_index_matrix(
+                len(values),
+                block_length,
+                config.bootstrap_repetitions,
+                rng,
             )
+            draws = values[indices].mean(axis=1)
             rows.append(
                 {
                     "model_name": model,

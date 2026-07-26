@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import pandas as pd
+import numpy as np
 
+from experiments.t1_sector_relative_volatility.block_bootstrap import (
+    moving_block_index_matrix,
+)
 from experiments.t1_sector_relative_volatility.config import TICKERS
 from experiments.t1_sector_relative_volatility.split_purged import (
     assign_non_overlapping_offsets,
@@ -25,3 +29,21 @@ def test_five_offsets_partition_dates_without_overlap() -> None:
         positions = [date_positions[pd.Timestamp(date)] for date in selected]
         assert all(right - left == 5 for left, right in zip(positions, positions[1:]))
         assert all(position % 5 == offset for position in positions)
+
+
+def test_vectorized_moving_blocks_are_deterministic_and_contiguous() -> None:
+    first = moving_block_index_matrix(
+        n_dates=20,
+        block_length=5,
+        repetitions=25,
+        rng=np.random.default_rng(42),
+    )
+    second = moving_block_index_matrix(
+        n_dates=20,
+        block_length=5,
+        repetitions=25,
+        rng=np.random.default_rng(42),
+    )
+    assert first.shape == (25, 20)
+    assert np.array_equal(first, second)
+    assert ((np.diff(first.reshape(25, 4, 5), axis=2) % 20) == 1).all()

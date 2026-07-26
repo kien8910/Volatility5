@@ -169,6 +169,12 @@ The CLI prints eight top-level stages. Long loops use `tqdm`, including target
 construction, model/seed training, offset evaluation, HAC tests and block
 bootstrap. Progress bars show completed work, percentage, elapsed time and ETA.
 
+Block bootstrap is vectorized on the date dimension. Per-date ticker-preserving
+loss and IC statistics are computed once; bootstrap repetitions use NumPy index
+matrices instead of rebuilding pandas DataFrames or recalculating Spearman
+correlations. This preserves cross-sectional dependence while avoiding the
+Python/GIL bottleneck.
+
 ## Required outputs
 
 Each run produces:

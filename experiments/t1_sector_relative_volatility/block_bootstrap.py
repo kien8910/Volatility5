@@ -30,39 +30,92 @@ def moving_block_indices(
     return indices[:n_dates]
 
 
-def _daily_ic(group: pd.DataFrame, prediction_column: str) -> float:
-    values = []
-    for _, day in group.groupby("date", sort=False):
-        values.append(
-            safe_correlation(
-                day["actual_t1"].to_numpy(),
-                day[prediction_column].to_numpy(),
-                method="spearman",
-            )
+def moving_block_index_matrix(
+    n_dates: int,
+    block_length: int,
+    repetitions: int,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """Generate all moving-block draws as a compact date-index matrix."""
+
+    if n_dates <= 0:
+        raise ValueError("n_dates must be positive")
+    if repetitions <= 0:
+        raise ValueError("repetitions must be positive")
+    block_length = min(block_length, n_dates)
+    block_count = int(np.ceil(n_dates / block_length))
+    starts = rng.integers(
+        0,
+        n_dates,
+        size=(repetitions, block_count),
+        dtype=np.int64,
+    )
+    offsets = np.arange(block_length, dtype=np.int64)
+    indices = (starts[:, :, None] + offsets[None, None, :]) % n_dates
+    return indices.reshape(repetitions, -1)[:, :n_dates]
+
+
+def _daily_sufficient_statistics(
+    group: pd.DataFrame,
+    huber_delta: float,
+) -> dict[str, np.ndarray]:
+    """Collapse ticker rows once; bootstrap then operates only on date arrays."""
+
+    rows: list[dict[str, float]] = []
+    for _, day in group.groupby("date", sort=True):
+        actual = day["actual_t1"].to_numpy(dtype=float)
+        baseline = day["baseline_prediction"].to_numpy(dtype=float)
+        text = day["text_prediction"].to_numpy(dtype=float)
+        rows.append(
+            {
+                "n": float(len(day)),
+                "absolute_base_sum": float(np.abs(actual - baseline).sum()),
+                "absolute_text_sum": float(np.abs(actual - text).sum()),
+                "squared_base_sum": float(((actual - baseline) ** 2).sum()),
+                "squared_text_sum": float(((actual - text) ** 2).sum()),
+                "huber_base_sum": float(
+                    huber_values(actual, baseline, huber_delta).sum()
+                ),
+                "huber_text_sum": float(
+                    huber_values(actual, text, huber_delta).sum()
+                ),
+                "daily_ic_base": safe_correlation(
+                    actual, baseline, method="spearman"
+                ),
+                "daily_ic_text": safe_correlation(
+                    actual, text, method="spearman"
+                ),
+            }
         )
-    return float(np.nanmean(values))
-
-
-def _statistics(sample: pd.DataFrame, huber_delta: float) -> dict[str, float]:
-    actual = sample["actual_t1"].to_numpy(dtype=float)
-    baseline = sample["baseline_prediction"].to_numpy(dtype=float)
-    text = sample["text_prediction"].to_numpy(dtype=float)
+    daily = pd.DataFrame(rows)
     return {
-        "delta_mae": float(
-            np.mean(np.abs(actual - baseline)) - np.mean(np.abs(actual - text))
-        ),
-        "delta_rmse": float(
-            np.sqrt(np.mean((actual - baseline) ** 2))
-            - np.sqrt(np.mean((actual - text) ** 2))
-        ),
-        "mean_paired_huber_difference": float(
-            huber_values(actual, baseline, huber_delta).mean()
-            - huber_values(actual, text, huber_delta).mean()
-        ),
-        "delta_mean_daily_ic": float(
-            _daily_ic(sample, "text_prediction")
-            - _daily_ic(sample, "baseline_prediction")
-        ),
+        column: daily[column].to_numpy(dtype=float)
+        for column in daily.columns
+    }
+
+
+def _vectorized_statistics(
+    daily: dict[str, np.ndarray],
+    indices: np.ndarray,
+) -> dict[str, np.ndarray]:
+    observation_count = daily["n"][indices].sum(axis=1)
+    absolute_base = daily["absolute_base_sum"][indices].sum(axis=1)
+    absolute_text = daily["absolute_text_sum"][indices].sum(axis=1)
+    squared_base = daily["squared_base_sum"][indices].sum(axis=1)
+    squared_text = daily["squared_text_sum"][indices].sum(axis=1)
+    huber_base = daily["huber_base_sum"][indices].sum(axis=1)
+    huber_text = daily["huber_text_sum"][indices].sum(axis=1)
+    return {
+        "delta_mae": absolute_base / observation_count
+        - absolute_text / observation_count,
+        "delta_rmse": np.sqrt(squared_base / observation_count)
+        - np.sqrt(squared_text / observation_count),
+        "mean_paired_huber_difference": huber_base / observation_count
+        - huber_text / observation_count,
+        "delta_mean_daily_ic": np.nanmean(
+            daily["daily_ic_text"][indices], axis=1
+        )
+        - np.nanmean(daily["daily_ic_base"][indices], axis=1),
     }
 
 
@@ -85,27 +138,17 @@ def block_bootstrap(
     ):
         group = test[
             test["comparison"].eq(comparison) & test["seed"].eq(seed)
-        ].copy()
-        dates = np.array(sorted(group["date"].unique()))
-        by_date = {date: part for date, part in group.groupby("date", sort=False)}
+        ].sort_values(["date", "ticker"])
+        daily = _daily_sufficient_statistics(group, config.huber_delta)
+        n_dates = len(daily["n"])
         rng = np.random.default_rng(seed + 1009 * block_length)
-        draws: dict[str, list[float]] = {
-            "delta_mae": [],
-            "delta_rmse": [],
-            "mean_paired_huber_difference": [],
-            "delta_mean_daily_ic": [],
-        }
-        for _ in range(config.bootstrap_repetitions):
-            selected = dates[moving_block_indices(len(dates), block_length, rng)]
-            pieces = []
-            for sample_index, date in enumerate(selected):
-                piece = by_date[date].copy()
-                piece["date"] = sample_index
-                pieces.append(piece)
-            sample = pd.concat(pieces, ignore_index=True)
-            statistics = _statistics(sample, config.huber_delta)
-            for metric, value in statistics.items():
-                draws[metric].append(value)
+        indices = moving_block_index_matrix(
+            n_dates,
+            block_length,
+            config.bootstrap_repetitions,
+            rng,
+        )
+        draws = _vectorized_statistics(daily, indices)
         alpha = (1.0 - config.bootstrap_confidence) / 2.0
         for metric, values in draws.items():
             array = np.asarray(values, dtype=float)
